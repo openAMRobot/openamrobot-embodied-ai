@@ -17,9 +17,11 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest"]
+native = ["pyarrow>=17,<27"]
 
 [project.scripts]
 oa-dataset-qa = "oa_embodied_ai.dataset_qa.cli:main"
+oa-c10-check = "oa_embodied_ai.dataset_qa.episode:main"
 
 [tool.setuptools.packages.find]
 include = ["oa_embodied_ai*"]

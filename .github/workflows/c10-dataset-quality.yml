@@ -1,0 +1,86 @@
+name: C10 episode quality gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  c10-reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      C10_CHECKER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      C10_EVIDENCE_DIR: .verification/c10-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Check out canonical C9 assets
+        uses: actions/checkout@v4
+        with:
+          repository: openAMRobot/openamrobot-interfaces
+          ref: 87ab8a936c97ab55ee74b8988ca3d7659160ea6a
+          path: external/openamrobot-interfaces
+          persist-credentials: false
+      - name: Prepare evidence directory
+        run: |
+          mkdir -p "$C10_EVIDENCE_DIR"
+          printf '%s\n' "$C10_CHECKER_SHA" > "$C10_EVIDENCE_DIR/expected-checker-sha.txt"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install scoped C10 verification dependencies
+        run: |
+          python -m pip install -e "python[test,native]"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Run nonempty C10 core suite
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          python python/tools/run_verification_tests.py python/tests test_c10_dataset.py 2>&1 | tee "$C10_EVIDENCE_DIR/core-suite.log"
+      - name: Run nonempty C10 native suite
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          python python/tools/run_verification_tests.py python/native_tests test_c10_native.py 2>&1 | tee "$C10_EVIDENCE_DIR/native-suite.log"
+      - name: Run nonempty C10 handoff suite
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          python python/tools/run_verification_tests.py python/tests test_c10_handoff.py 2>&1 | tee "$C10_EVIDENCE_DIR/handoff-suite.log"
+      - name: Run nonempty C10 evidence suite
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          python python/tools/run_verification_tests.py python/native_tests test_c10_evidence.py 2>&1 | tee "$C10_EVIDENCE_DIR/evidence-suite.log"
+      - name: Prove reverted arithmetic check is detected
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          python python/tools/prove_c10_negative.py 2>&1 | tee "$C10_EVIDENCE_DIR/revert-negative.log"
+      - name: Generate reproducible synthetic CLI evidence
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          python python/tools/generate_c10_evidence.py \
+            --output-dir "$C10_EVIDENCE_DIR/synthetic" \
+            --expected-checker-sha "$C10_CHECKER_SHA" \
+            2>&1 | tee "$C10_EVIDENCE_DIR/generation.log"
+      - name: Upload C10 report and test evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: c10-evidence-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          path: .verification/c10-evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
