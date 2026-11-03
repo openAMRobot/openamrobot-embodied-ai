@@ -5,16 +5,23 @@ Date: 2 November 2026 (America/Chicago). Exact original heads: C10 PR #3
 `79ac48e0fda292ddb52596337a745f0b77a35781`; C11 PR #4
 `db199924543d888259fdf87c829481968e2112f3`. The integration worktree preserves
 both commits and records the final execution HEAD, full source hashes, commands,
-exit codes and environment in `.verification/c10-c11/final/final-execution.json`.
+exit codes and environment in `.verification/c10-c11/final-head/final-execution.json`.
 Run the complete recorder with:
 
 ```bash
-.venv/bin/python python/tools/verify_c10_c11.py --output-dir .verification/c10-c11/final
+.venv/bin/python python/tools/verify_c10_c11.py --output-dir .verification/c10-c11/final-head
 ```
 
 Ignored local evidence remains available in this worktree; it is not a real
 recording or a production artifact. Published CI artifacts will be separate
 remote evidence only once those jobs actually execute.
+
+The complete recorder was rerun on clean commit
+`638e5f8239012267d97669bcc1d36eb035e2e351` after correcting the existing
+`quality/python` dependency installation. Every command passed. Runtime source
+SHA-256 is `f9f896f73635123e835ffc01e16a0d71e895393b65a1a3bb75c6b13e4832935d`,
+identical to the prior clean `49822d3` run. Subsequent evidence-document updates
+do not change runtime code; the manifest retains the exact execution commit.
 
 ## Environment and reproduction
 
@@ -46,7 +53,7 @@ has 324 PASS findings and two NOT_VERIFIED C10_REAL_EPISODE findings, readiness
 false and exit 2. The software-test helper exits 0 only for the expected narrow
 synthetic semantics. Physical and production acceptance remain NOT_VERIFIED.
 
-Test logs below are relative to `.verification/c10-c11/final/`; the original
+Test logs below are relative to `.verification/c10-c11/final-head/`; the original
 baseline log remains in `.verification/c10-c11/`. C11 QA/manifest hashes use
 canonical JSON (`sort_keys=True`, compact separators); the original C10 CLI
 report hash is over its exact serialized file bytes. Checkpoint hashes always
