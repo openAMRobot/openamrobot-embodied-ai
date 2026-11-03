@@ -14,7 +14,6 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torchvision.models as models
 
 from .config import ACTConfig
@@ -27,7 +26,9 @@ class SinusoidalPositionalEncoding(nn.Module):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+        )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer("pe", pe.unsqueeze(0))
@@ -101,12 +102,16 @@ class CVAEEncoder(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=enc_layers)
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=enc_layers
+        )
 
         self.to_mu = nn.Linear(d_model, latent_dim)
         self.to_log_var = nn.Linear(d_model, latent_dim)
 
-    def forward(self, state: torch.Tensor, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, state: torch.Tensor, actions: torch.Tensor, action_mask=None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Encode state and target actions into latent distribution parameters.
 
         Args:
@@ -121,9 +126,20 @@ class CVAEEncoder(nn.Module):
         state_tokens = self.state_proj(state).unsqueeze(1)  # (B, 1, d_model)
         action_tokens = self.action_proj(actions)  # (B, K, d_model)
 
-        seq = torch.cat([cls_tokens, state_tokens, action_tokens], dim=1)  # (B, K+2, d_model)
+        seq = torch.cat(
+            [cls_tokens, state_tokens, action_tokens], dim=1
+        )  # (B, K+2, d_model)
         seq = self.pos_enc(seq)
-        encoded = self.transformer_encoder(seq)
+        padding = None
+        if action_mask is not None:
+            padding = torch.cat(
+                [
+                    torch.zeros((B, 2), dtype=torch.bool, device=state.device),
+                    ~action_mask.bool(),
+                ],
+                dim=1,
+            )
+        encoded = self.transformer_encoder(seq, src_key_padding_mask=padding)
 
         cls_out = encoded[:, 0]  # (B, d_model)
         mu = self.to_mu(cls_out)
@@ -159,7 +175,9 @@ class TransformerDecoder(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=dec_layers)
+        self.transformer_decoder = nn.TransformerDecoder(
+            decoder_layer, num_layers=dec_layers
+        )
         self.action_head = nn.Linear(d_model, action_dim)
 
     def forward(self, memory: torch.Tensor) -> torch.Tensor:
@@ -179,10 +197,11 @@ class TransformerDecoder(nn.Module):
 
 
 class ACTPolicy(nn.Module):
-    """Complete Vision-Based Action Chunking with Transformers (ACT) Policy."""
+    """Custom visual ACT-like policy; upstream LeRobot compatibility unverified."""
 
     def __init__(self, config: ACTConfig) -> None:
         super().__init__()
+        config.validate()
         self.config = config
         self.chunk_size = config.chunk_size
         self.state_dim = config.state_dim
@@ -195,6 +214,10 @@ class ACTPolicy(nn.Module):
         self.visual_backbone = MultiCameraVisualBackbone(
             d_model=config.d_model,
             num_cameras=self.num_cameras,
+        )
+
+        self.camera_identity = nn.Parameter(
+            torch.randn(1, self.num_cameras, config.d_model)
         )
 
         # Proprioceptive state & latent projections for memory
@@ -235,6 +258,7 @@ class ACTPolicy(nn.Module):
         state: torch.Tensor,
         images: Optional[torch.Tensor] = None,
         actions: Optional[torch.Tensor] = None,
+        action_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         """Forward pass of ACT policy.
 
@@ -249,32 +273,44 @@ class ACTPolicy(nn.Module):
             log_var: (B, latent_dim) or None
         """
         B = state.shape[0]
+        if state.ndim != 2 or state.shape[1] != self.state_dim:
+            raise ValueError("State dimension differs from selected profile")
+        if (
+            images is None
+            or images.ndim != 5
+            or images.shape[:3] != (B, self.num_cameras, 3)
+        ):
+            raise ValueError(
+                "Visual ACT requires all four image tensors; no state-only fallback"
+            )
+        if actions is not None and actions.shape != (
+            B,
+            self.chunk_size,
+            self.action_dim,
+        ):
+            raise ValueError("Action chunk shape differs from configuration")
 
         # 1. CVAE Latent variable sampling
         if actions is not None:
-            mu, log_var = self.cvae_encoder(state, actions)
+            mu, log_var = self.cvae_encoder(state, actions, action_mask)
             z = self.reparameterize(mu, log_var)
         else:
             mu, log_var = None, None
             # During evaluation, set z = 0 (mean of prior)
-            z = torch.zeros((B, self.latent_dim), device=state.device, dtype=state.dtype)
+            z = torch.zeros(
+                (B, self.latent_dim), device=state.device, dtype=state.dtype
+            )
 
         # 2. Extract visual features
-        if images is not None:
-            camera_tokens = self.visual_backbone(images)  # (B, num_cameras, d_model)
-        else:
-            # Fallback zero tokens if images omitted in state-only tests
-            camera_tokens = torch.zeros(
-                (B, self.num_cameras, self.d_model),
-                device=state.device,
-                dtype=state.dtype,
-            )
+        camera_tokens = self.visual_backbone(images) + self.camera_identity
 
         # 3. Assemble memory conditioning sequence
         z_token = self.latent_proj(z).unsqueeze(1)  # (B, 1, d_model)
         state_token = self.state_proj(state).unsqueeze(1)  # (B, 1, d_model)
 
-        memory = torch.cat([z_token, state_token, camera_tokens], dim=1)  # (B, 2+num_cams, d_model)
+        memory = torch.cat(
+            [z_token, state_token, camera_tokens], dim=1
+        )  # (B, 2+num_cams, d_model)
 
         # 4. Decode action chunk
         pred_actions = self.decoder(memory)
@@ -296,7 +332,9 @@ class ACTPolicy(nn.Module):
         if action_mask is not None:
             # Mask shape (B, K) -> expand to (B, K, action_dim)
             mask = action_mask.unsqueeze(-1)
-            l1_loss = (l1_diff * mask).sum() / (mask.sum() * target_actions.shape[-1] + 1e-8)
+            l1_loss = (l1_diff * mask).sum() / (
+                mask.sum() * target_actions.shape[-1] + 1e-8
+            )
         else:
             l1_loss = l1_diff.mean()
 
@@ -314,4 +352,3 @@ class ACTPolicy(nn.Module):
             "l1_loss": l1_loss,
             "kl_loss": kl_loss,
         }
-

@@ -1,69 +1,60 @@
-# C11 ACT Policy Training Engine
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+# C11 experimental custom visual imitation
 
-The `oa_embodied_ai.training` package implements Deliverable C11 (Action Chunking with Transformers Imitation Learning Baseline) for the OpenAMRobot 2.0 whole-body platform.
+This is a custom ACT-like CVAE/ResNet18/Transformer implementation. It does not
+execute upstream LeRobot ACT. Native metadata/media are read directly; upstream
+LeRobot compatibility and any validated release remain NOT_VERIFIED.
 
-## CLI Entry Point: `oa-c11-train`
+Install from repository root with `python -m pip install -e 'python[test,native,training]'`
+and provide ffmpeg/ffprobe. No ROS, simulator, GPU or robot is needed for tests.
+The CPU-only CI uses PyTorch's CPU package index. Dependency constraints are
+experimental software requirements, not an approved production release policy.
 
-Execute training via console script or module:
+Training requires a reviewed C10 policy and independently supplied input manifest:
 
 ```bash
-# Rapid CPU smoke test (2 epochs, minimal batches)
-oa-c11-train --dataset-path path/to/dataset --smoke-test --allow-synthetic-eval
-
-# Full training run with custom config and output directory
-oa-c11-train --dataset-path path/to/dataset --config configs/c11_act_default.yaml --output-dir outputs/c11_run --epochs 50 --device cuda
+oa-c11-train --dataset-path /immutable/dataset --policy /reviewed/policy.json \
+  --input-manifest /reviewed/input-manifest.json --config /reviewed/training.yaml \
+  --output-dir /fresh/output
 ```
 
-### CLI Arguments
+The manifest is external to the dataset, contains `manifest_version: 1`, exact
+`dataset_id`, `dataset_revision`, `episode_indices`, `profile`, `data_origin`
+(actual or synthetic), nonempty `evidence`, `policy_sha256` (hex digest) and
+`files_sha256` (every relative file path mapped to its full hex digest).
+Release/recording owners provide identity/origin/policy bindings for actual data.
+Do not derive them from a QA report or use a synthetic manifest for a recording.
 
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `--dataset-path` | `Path` | *Required* | Path to the `LeRobotDataset v3.0` directory tree. |
-| `--config` | `Path` | `configs/c11_act_default.yaml` | Path to YAML configuration file specifying kinematic profile and hyperparameters. |
-| `--qa-report` | `Path` | `None` (auto-detected) | Path to pre-flight C10 QA report JSON. If omitted, checks standard report paths or runs `check_dataset`. |
-| `--output-dir` | `Path` | `outputs/c11_training` | Destination directory for checkpoints, hashes, and run summaries. |
-| `--smoke-test` | `bool` | `False` | Run rapid 2-epoch CPU verification loop without training full epochs. |
-| `--allow-synthetic-eval` | `bool` | `False` | Permit synthetic or Gazebo data override for CI dry-runs. Stamps output `NOT_VERIFIED_PHYSICAL`. |
-| `--epochs` | `int` | Config default (`50`) | Total number of training epochs. |
-| `--batch-size` | `int` | Config default (`8`) | Batch size for train and evaluation loaders. |
-| `--device` | `str` | `"cpu"` / `"cuda"` | PyTorch device string. |
-| `--seed` | `int` | Config default (`42`) | Deterministic random seed for episode partitioning and model weights. |
+C11 verifies the complete snapshot, copies it privately, invokes `check_dataset`
+with that policy and selection, then calls canonical `training_readiness` with
+independent expected identity. Missing, contradictory, stale or incomplete QA
+blocks with exit 2. Registry quality labels cannot substitute. `--qa-report`,
+if explicitly supplied, is only an exact comparison with fresh QA; no report
+is discovered automatically. Output must be fresh and outside the dataset.
 
----
+`--allow-synthetic-eval` permits software testing only when ALL diagnostics pass
+except C10_REAL_EPISODE, which must say synthetic/NOT_VERIFIED for every selected
+episode. Raw C10 readiness remains false, exit 2 and NOT_VERIFIED. The flag never
+permits other missing/rejected evidence. `--smoke-test` forces CPU, two epochs
+and at most two batches per training/validation epoch.
 
-## Fail-Closed Training Gate Invariant
+Four canonical camera keys in order: head, base, camera_wrist_left,
+camera_wrist_right (each prefixed `observation.images.`). No camera alias,
+missing-video zero substitute, or state-only fallback exists. Native `data_path`,
+`video_path`, shared-file episode IDs and video segment offsets drive loading.
+Profiles require exact names/dimensions; no padding, truncation, unit coercion or
+lift action is introduced. See [the mapping](../../../docs/c10/robot-profile-compatibility-v1.md).
 
-Per OpenAMRobot 2.0 Working Rules Section 10 and C10 handoff requirements, training **must fail closed** on unverified, synthetic, or contradictory data:
+At least two selected episodes are needed for a disjoint validation split. Target
+padding is masked in both CVAE encoder and loss; validation predicts from the
+prior without target-conditioned latent. Checkpoints retain configuration,
+preprocessing size, actual split IDs, input manifest/QA hashes and actual code
+and dependency provenance. The final checkpoint is `act_policy_last.pt`.
 
-1. **Explicit Readiness**: `training_ready` must be explicitly `true`. If `false` or missing, the runner raises `TrainingBlockedError` and terminates with **exit code 2**.
-2. **Quality Status**: `quality_status` / `status` must not be `BLOCKED`, `REJECT`, or `NOT_VERIFIED`.
-3. **Physical Origin Requirement**: If `source_profile != "ROBOT"`, training aborts immediately with exit code 2 unless `--allow-synthetic-eval` is explicitly passed. When overridden, logs `WARNING: Synthetic data override active. Artifacts will be stamped NOT_VERIFIED_PHYSICAL.`
-4. **Contradiction Invariant**: If the C10 QA report contains *any* finding with `severity == "REJECT"` or `status == "REJECT"`, the gate is blocked regardless of top-level boolean fields.
+All software summaries remain `NOT_VERIFIED_PHYSICAL`; production acceptance
+is `NOT_VERIFIED`. Training is not physical validation. A bounded, honest
+synthetic evidence bundle can be generated from the source tree:
 
----
-
-## Model Architecture
-
-The vision-based ACT policy integrates:
-- **Multi-Camera Visual Backbone**: Ingests all 4 canonical C9 camera streams (`observation.images.head`, `observation.images.base`, `observation.images.camera_wrist_left`, `observation.images.camera_wrist_right`). Applies 224×224 resize and ImageNet normalization (`mean=[0.485, 0.456, 0.406]`, `std=[0.229, 0.224, 0.225]`), then extracts feature tokens via a shared ResNet-18 backbone projected to dimension `d_model` (256).
-- **CVAE Style Encoder**: Conditions on a learnable `[CLS]` token, current proprioceptive state, and target future action chunk ($K=100$). Uses a 4-layer transformer encoder to parameterize latent style distribution $\mathcal{N}(\mu, \sigma^2)$ where $D_{\text{latent}} = 32$. During inference, $z$ is clamped to zero.
-- **Transformer Decoder**: Combines $K=100$ learned position queries with conditioning memory ($z$, state token, 4 camera tokens) through a 4-layer transformer decoder with 8 attention heads to predict continuous multi-step trajectories ($100 \times \text{action\_dim}$).
-- **Loss Function**: $\mathcal{L}_{\text{total}} = \text{L1}(\hat{a}, a) \cdot \lambda_{\text{L1}} + D_{\text{KL}}(\mathcal{N}(\mu, \sigma^2) \parallel \mathcal{N}(0, I)) \cdot \lambda_{\text{KL}}$ ($\lambda_{\text{L1}} = 1.0, \lambda_{\text{KL}} = 10.0$).
-
----
-
-## Supported Kinematic Profiles
-
-| Profile Name | Channels | State/Action Dim | Subsystems Covered |
-|---|---|---|---|
-| `openamrobot-fixed-mast-19dof` | 19 | 19 | 3 base (`base_linear_x`, `base_linear_y`, `base_angular_z`) + 2 fixed mast (`torso_pitch`, `torso_yaw` locked `[0, 0]`) + 7 left arm/gripper + 7 right arm/gripper |
-| `lerobot-v0.6.1-bi-openarm-position` | 16 | 16 | 8 left arm/gripper (`openarm_left_joint1..7` + gripper) + 8 right arm/gripper |
-
----
-
-## Artifact Outputs
-
-Training emits:
-- `act_policy_best.pt`: PyTorch weights and configuration payload.
-- `act_policy_best.pt.sha256`: Cryptographic SHA-256 hash of the checkpoint.
-- `c11_training_summary.json`: Provenance metadata recording exact train/validation episode partitions, gate status, training/validation losses, git commit, and environment versions.
+```bash
+python python/tools/run_c11_smoke.py --output-dir .verification/fresh-c11-smoke
+```

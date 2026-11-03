@@ -5,20 +5,23 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import logging
-from pathlib import Path
-import subprocess
 import sys
-import time
-from typing import Any, Dict, List, Optional, Sequence
+from pathlib import Path
+from typing import Any, Dict, Optional, Sequence
 
 import torch
 from torch.utils.data import DataLoader
 
 from .config import ACTConfig, load_config
-from .dataset import MultiCameraACTDataset, find_episode_parquet_files, partition_episodes
-from .gate import GateStatus, TrainingBlockedError, verify_training_gate
+from .dataset import (
+    MultiCameraACTDataset,
+    find_episode_parquet_files,
+    partition_episodes,
+)
+from .evidence import execution_provenance, write_report
+from .gate import TrainingBlockedError, verify_training_gate
+from .inputs import assert_unchanged, bound_snapshot, json_sha256
 from .model import ACTPolicy
 
 LOG = logging.getLogger("oa-c11-train")
@@ -33,24 +36,6 @@ def compute_file_sha256(filepath: Path) -> str:
     return h.hexdigest()
 
 
-def get_git_commit(repo_dir: Path) -> str:
-    """Retrieve git HEAD commit SHA or return unknown."""
-    try:
-        res = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if res.returncode == 0:
-            return res.stdout.strip()
-    except Exception:
-        pass
-    return "unknown"
-
-
 def train_act(
     dataset_path: Path,
     config: ACTConfig,
@@ -58,6 +43,9 @@ def train_act(
     output_dir: Path = Path("outputs/c11_training"),
     smoke_test: bool = False,
     allow_synthetic_eval: bool = False,
+    *,
+    input_manifest_path=None,
+    policy_path=None,
 ) -> Dict[str, Any]:
     """Execute ACT baseline training pipeline with mandatory pre-flight gate.
 
@@ -67,21 +55,77 @@ def train_act(
     Raises:
         TrainingBlockedError: If pre-flight gate fails.
     """
-    dataset_path = Path(dataset_path)
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if smoke_test:
+        from dataclasses import replace
 
+        config = replace(config, device="cpu")
+    config.validate()
+    dataset_path = Path(dataset_path).resolve()
+    output_dir = Path(output_dir).resolve()
+    if output_dir.is_relative_to(dataset_path):
+        raise TrainingBlockedError("Training output must be outside the dataset")
+    with bound_snapshot(dataset_path, input_manifest_path, policy_path) as (
+        snapshot,
+        policy_copy,
+    ):
+        summary = _train_snapshot(
+            snapshot,
+            config,
+            qa_report_path,
+            output_dir,
+            smoke_test,
+            allow_synthetic_eval,
+            input_manifest_path,
+            policy_copy,
+            dataset_path,
+            policy_path,
+        )
+    write_report(output_dir / "c11_training_summary.json", summary)
+    return summary
+
+
+def _train_snapshot(
+    dataset_path,
+    config,
+    qa_report_path,
+    output_dir,
+    smoke_test,
+    allow_synthetic_eval,
+    input_manifest_path,
+    policy_path,
+    original_dataset_path,
+    original_policy_path,
+):
     # 1. Mandatory Pre-Flight Gate Verification (Fail-Closed)
     LOG.info("Executing mandatory C10 pre-flight gate...")
     gate_status = verify_training_gate(
         dataset_path=dataset_path,
         qa_report_path=qa_report_path,
         allow_synthetic_override=allow_synthetic_eval,
+        input_manifest_path=input_manifest_path,
+        policy_path=policy_path,
     )
-    LOG.info("Pre-flight gate PASSED (source_profile=%s)", gate_status.source_profile)
+    LOG.info(
+        "Canonical C10 status=%s; synthetic_test=%s",
+        gate_status.quality_status,
+        gate_status.is_synthetic_override,
+    )
+    source_before = execution_provenance()
 
     # 2. Locate episodes and partition
-    ep_files = find_episode_parquet_files(dataset_path)
+    if gate_status.input_manifest["profile"] != config.profile:
+        raise TrainingBlockedError("Input profile differs from configured profile")
+    ep_files = [
+        ep
+        for ep in find_episode_parquet_files(dataset_path)
+        if ep.episode_index in gate_status.input_manifest["episode_indices"]
+    ]
+    if sorted(e.episode_index for e in ep_files) != sorted(
+        gate_status.input_manifest["episode_indices"]
+    ):
+        raise TrainingBlockedError(
+            "Training selection differs from checked episode selection"
+        )
     if not ep_files:
         raise FileNotFoundError(f"No episode parquet files found under {dataset_path}")
 
@@ -95,7 +139,10 @@ def train_act(
         len(val_eps),
     )
 
-    device = torch.device(config.device if torch.cuda.is_available() or config.device == "cpu" else "cpu")
+    output_dir.mkdir(parents=True, exist_ok=False)
+    device = torch.device(
+        config.device if torch.cuda.is_available() or config.device == "cpu" else "cpu"
+    )
     torch.manual_seed(config.seed)
 
     # 3. Build Datasets
@@ -108,7 +155,7 @@ def train_act(
     )
     val_dataset = MultiCameraACTDataset(
         dataset_path=dataset_path,
-        episode_paths=val_eps if val_eps else train_eps,
+        episode_paths=val_eps,
         config=config,
         load_images=True,
         normalize_images=True,
@@ -120,10 +167,14 @@ def train_act(
 
     # 4. Instantiate ACT Policy
     policy = ACTPolicy(config).to(device)
-    optimizer = torch.optim.AdamW(policy.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+    optimizer = torch.optim.AdamW(
+        policy.parameters(), lr=config.lr, weight_decay=config.weight_decay
+    )
 
     epochs = 2 if smoke_test else config.epochs
-    LOG.info("Starting training on %s (epochs=%d, smoke_test=%s)", device, epochs, smoke_test)
+    LOG.info(
+        "Starting training on %s (epochs=%d, smoke_test=%s)", device, epochs, smoke_test
+    )
 
     train_loss_val = 0.0
     val_loss_val = 0.0
@@ -133,14 +184,16 @@ def train_act(
         epoch_loss = 0.0
         steps = 0
 
-        for batch_idx, batch in enumerate(train_loader):
+        for batch in train_loader:
             states = batch["state"].to(device)
             images = batch["images"].to(device)
             actions = batch["actions"].to(device)
             masks = batch["action_mask"].to(device)
 
             optimizer.zero_grad()
-            pred_actions, mu, log_var = policy(state=states, images=images, actions=actions)
+            pred_actions, mu, log_var = policy(
+                state=states, images=images, actions=actions, action_mask=masks
+            )
             loss_dict = policy.compute_loss(
                 pred_actions=pred_actions,
                 target_actions=actions,
@@ -151,6 +204,8 @@ def train_act(
                 kl_weight=config.kl_weight,
             )
             loss = loss_dict["loss"]
+            if not torch.isfinite(loss):
+                raise ValueError("Nonfinite training loss")
             loss.backward()
             optimizer.step()
 
@@ -168,13 +223,13 @@ def train_act(
         val_epoch_loss = 0.0
         val_steps = 0
         with torch.no_grad():
-            for batch_idx, batch in enumerate(val_loader):
+            for batch in val_loader:
                 states = batch["state"].to(device)
                 images = batch["images"].to(device)
                 actions = batch["actions"].to(device)
                 masks = batch["action_mask"].to(device)
 
-                pred_actions, mu, log_var = policy(state=states, images=images, actions=actions)
+                pred_actions, mu, log_var = policy(state=states, images=images)
                 loss_dict = policy.compute_loss(
                     pred_actions=pred_actions,
                     target_actions=actions,
@@ -192,11 +247,40 @@ def train_act(
         val_loss_val = val_epoch_loss / max(1, val_steps)
         LOG.info("Epoch %d/%d - Val Loss: %.4f", epoch + 1, epochs, val_loss_val)
 
-    # 5. Save Checkpoint and Hash
-    ckpt_path = output_dir / "act_policy_best.pt"
+    # Do not publish success after any source/snapshot/policy mutation.
+    try:
+        assert_unchanged(dataset_path, gate_status.input_manifest, policy_path)
+        assert_unchanged(
+            original_dataset_path, gate_status.input_manifest, original_policy_path
+        )
+    except (OSError, ValueError) as error:
+        raise TrainingBlockedError(str(error)) from error
+    provenance = execution_provenance()
+    if provenance["source_sha256"] != source_before["source_sha256"]:
+        raise TrainingBlockedError("Package source changed during training")
+    gate_evidence = {
+        "decision": gate_status.decision,
+        "report_sha256": gate_status.report_sha256,
+        "input_manifest": gate_status.input_manifest,
+        "input_manifest_sha256": json_sha256(gate_status.input_manifest),
+    }
+    write_report(
+        output_dir / "c10_gate_evidence.json",
+        {
+            "acceptance_status": "NOT_VERIFIED_PHYSICAL",
+            "production_acceptance": "NOT_VERIFIED",
+            **gate_evidence,
+            "raw_c10_report": gate_status.qa_report,
+        },
+    )
+
+    # 5. Save final checkpoint; no best-checkpoint selection is implemented.
+    ckpt_path = output_dir / "act_policy_last.pt"
     ckpt_payload = {
         "model_state_dict": policy.state_dict(),
         "config": config.to_dict(),
+        "provenance": provenance,
+        "gate_evidence": gate_evidence,
         "train_indices": train_indices,
         "val_indices": val_indices,
         "gate_status": {
@@ -207,7 +291,7 @@ def train_act(
     }
     torch.save(ckpt_payload, ckpt_path)
     ckpt_sha256 = compute_file_sha256(ckpt_path)
-    (output_dir / "act_policy_best.pt.sha256").write_text(ckpt_sha256, encoding="utf-8")
+    (output_dir / "act_policy_last.pt.sha256").write_text(ckpt_sha256, encoding="utf-8")
     LOG.info("Saved checkpoint to %s (SHA-256: %s)", ckpt_path, ckpt_sha256)
 
     # 6. Save Training Metadata Summary
@@ -215,7 +299,7 @@ def train_act(
         "status": "COMPLETED",
         "checkpoint_path": str(ckpt_path),
         "checkpoint_sha256": ckpt_sha256,
-        "dataset_path": str(dataset_path),
+        "dataset_path": str(original_dataset_path),
         "train_episodes": train_indices,
         "val_episodes": val_indices,
         "train_loss": train_loss_val,
@@ -224,40 +308,73 @@ def train_act(
         "gate_status": gate_status.quality_status,
         "source_profile": gate_status.source_profile,
         "is_synthetic_override": gate_status.is_synthetic_override,
-        "acceptance_status": "NOT_VERIFIED_PHYSICAL" if gate_status.is_synthetic_override else "VERIFIED_PHYSICAL",
-        "provenance": {
-            "git_commit": get_git_commit(Path(__file__).resolve().parents[3]),
-            "python_version": sys.version.split()[0],
-            "torch_version": torch.__version__,
+        "acceptance_status": "NOT_VERIFIED_PHYSICAL",
+        "production_acceptance": "NOT_VERIFIED",
+        "offline_metrics": {
+            "train_loss": train_loss_val,
+            "validation_prior_l1": val_loss_val,
         },
+        "gate_evidence": gate_evidence,
+        "provenance": provenance,
     }
-    summary_path = output_dir / "c11_training_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    LOG.info("Saved training summary to %s", summary_path)
-
     return summary
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """CLI entry point for oa-c11-train."""
-    parser = argparse.ArgumentParser(description="Deliverable C11: ACT Baseline Trainer")
-    parser.add_argument("--dataset-path", type=Path, required=True, help="Path to LeRobotDataset directory")
-    parser.add_argument("--config", type=Path, default=None, help="Path to YAML config file")
-    parser.add_argument("--qa-report", type=Path, default=None, help="Path to pre-flight QA report")
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/c11_training"), help="Output directory")
-    parser.add_argument("--smoke-test", action="store_true", help="Run rapid CPU smoke test")
-    parser.add_argument("--allow-synthetic-eval", action="store_true", help="Allow synthetic/Gazebo data override")
-    parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs")
+    parser = argparse.ArgumentParser(
+        description="Deliverable C11: ACT Baseline Trainer"
+    )
+    parser.add_argument(
+        "--dataset-path",
+        type=Path,
+        required=True,
+        help="Path to LeRobotDataset directory",
+    )
+    parser.add_argument(
+        "--config", type=Path, default=None, help="Path to YAML config file"
+    )
+    parser.add_argument(
+        "--input-manifest",
+        type=Path,
+        required=True,
+        help="Owner-supplied immutable snapshot bindings",
+    )
+    parser.add_argument(
+        "--policy", type=Path, required=True, help="Reviewed C10 policy"
+    )
+    parser.add_argument(
+        "--qa-report", type=Path, default=None, help="Path to pre-flight QA report"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("outputs/c11_training"),
+        help="Output directory",
+    )
+    parser.add_argument(
+        "--smoke-test", action="store_true", help="Run rapid CPU smoke test"
+    )
+    parser.add_argument(
+        "--allow-synthetic-eval",
+        action="store_true",
+        help="Allow synthetic/Gazebo data override",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=None, help="Number of training epochs"
+    )
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size")
     parser.add_argument("--device", type=str, default=None, help="Device (cpu or cuda)")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
 
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
 
     # Load configuration
-    if args.config is not None and args.config.is_file():
+    if args.config is not None:
         cfg = load_config(args.config)
     else:
         # Default config fallback
@@ -287,6 +404,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             output_dir=args.output_dir,
             smoke_test=args.smoke_test,
             allow_synthetic_eval=args.allow_synthetic_eval,
+            input_manifest_path=args.input_manifest,
+            policy_path=args.policy,
         )
         return 0
     except TrainingBlockedError as exc:
@@ -299,4 +418,3 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

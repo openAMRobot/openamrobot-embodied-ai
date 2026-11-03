@@ -2,7 +2,7 @@
 """Kinematic profile configurations for Deliverable C11 ACT Baseline.
 
 Supports:
-  - openamrobot-fixed-mast-19dof (19 channels: 3 base + 2 fixed mast [0,0] + 14 arm + 2 grippers)
+  - openamrobot-fixed-mast-19dof (19 channels: 3 base + 2 fixed mast + 12 arm + 2 grippers)
   - lerobot-v0.6.1-bi-openarm-position (16 channels: 14 arm + 2 grippers)
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import yaml
 
@@ -37,22 +37,10 @@ OPENAMROBOT_19DOF_CHANNELS: List[str] = [
 ]
 
 LEROBOT_16DOF_CHANNELS: List[str] = [
-    "openarm_left_joint1",
-    "openarm_left_joint2",
-    "openarm_left_joint3",
-    "openarm_left_joint4",
-    "openarm_left_joint5",
-    "openarm_left_joint6",
-    "openarm_left_joint7",
-    "openarm_left_gripper",
-    "openarm_right_joint1",
-    "openarm_right_joint2",
-    "openarm_right_joint3",
-    "openarm_right_joint4",
-    "openarm_right_joint5",
-    "openarm_right_joint6",
-    "openarm_right_joint7",
-    "openarm_right_gripper",
+    *[f"left_joint_{i}.pos" for i in range(1, 8)],
+    "left_gripper.pos",
+    *[f"right_joint_{i}.pos" for i in range(1, 8)],
+    "right_gripper.pos",
 ]
 
 CANONICAL_CAMERA_KEYS: List[str] = [
@@ -73,7 +61,9 @@ class ACTConfig:
     action_dim: int = 19
     chunk_size: int = 100
     fps: int = 30
-    channel_names: List[str] = field(default_factory=lambda: list(OPENAMROBOT_19DOF_CHANNELS))
+    channel_names: List[str] = field(
+        default_factory=lambda: list(OPENAMROBOT_19DOF_CHANNELS)
+    )
     camera_keys: List[str] = field(default_factory=lambda: list(CANONICAL_CAMERA_KEYS))
     vision_backbone: str = "resnet18"
     image_size: Tuple[int, int] = (224, 224)
@@ -93,6 +83,51 @@ class ACTConfig:
     eval_split: float = 0.2
     seed: int = 42
     device: str = "cpu"
+
+    def validate(self):
+        expected = {
+            "openamrobot-fixed-mast-19dof": OPENAMROBOT_19DOF_CHANNELS,
+            "lerobot-v0.6.1-bi-openarm-position": LEROBOT_16DOF_CHANNELS,
+        }.get(self.profile)
+        if (
+            expected is None
+            or self.state_dim != len(expected)
+            or self.action_dim != len(expected)
+        ):
+            raise ValueError("Unsupported profile/dimension mix; no padding or slicing")
+        if self.channel_names != expected:
+            raise ValueError("Channel names/order differ from the selected profile")
+        if self.camera_keys != CANONICAL_CAMERA_KEYS:
+            raise ValueError("Four canonical cameras in explicit order are required")
+        if self.vision_backbone != "resnet18":
+            raise ValueError("Only the custom resnet18 backbone is implemented")
+        for key in (
+            "state_dim",
+            "action_dim",
+            "chunk_size",
+            "fps",
+            "d_model",
+            "n_heads",
+            "enc_layers",
+            "dec_layers",
+            "latent_dim",
+            "dim_feedforward",
+            "batch_size",
+            "epochs",
+        ):
+            if type(getattr(self, key)) is not int or getattr(self, key) < 1:
+                raise ValueError(f"{key} must be a positive integer")
+        if self.chunk_size > 498 or self.d_model % 2 or self.d_model % self.n_heads:
+            raise ValueError(
+                "Invalid transformer dimensions/positional encoding length"
+            )
+        if not 0 < self.eval_split < 1:
+            raise ValueError("Held-out episode split must be between zero and one")
+        if len(self.image_size) != 2 or any(
+            type(i) is not int or i < 32 for i in self.image_size
+        ):
+            raise ValueError("image_size must contain two integers >= 32")
+        return self
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -117,7 +152,9 @@ def get_profile_config(profile_name: str) -> ACTConfig:
             channel_names=list(LEROBOT_16DOF_CHANNELS),
         )
     else:
-        raise ValueError(f"Unknown kinematic profile: '{profile_name}'. Supported: 'openamrobot-fixed-mast-19dof', 'lerobot-v0.6.1-bi-openarm-position'")
+        raise ValueError(
+            f"Unknown kinematic profile: '{profile_name}'. Supported: 'openamrobot-fixed-mast-19dof', 'lerobot-v0.6.1-bi-openarm-position'"
+        )
 
 
 def load_config(path: Union[str, Path]) -> ACTConfig:
@@ -150,6 +187,7 @@ def load_config(path: Union[str, Path]) -> ACTConfig:
         cfg.latent_dim = m.get("latent_dim", cfg.latent_dim)
         cfg.dropout = m.get("dropout", cfg.dropout)
         cfg.vision_backbone = m.get("vision_backbone", cfg.vision_backbone)
+        cfg.image_size = tuple(m.get("image_size", cfg.image_size))
         if "camera_keys" in m:
             cfg.camera_keys = list(m["camera_keys"])
         if "channel_names" in m:
@@ -163,7 +201,7 @@ def load_config(path: Union[str, Path]) -> ACTConfig:
         cfg.eval_split = t.get("eval_split", cfg.eval_split)
         cfg.seed = t.get("seed", cfg.seed)
         cfg.device = t.get("device", cfg.device)
-        return cfg
+        return cfg.validate()
 
     # Flat dict format
     profile = data.get("profile", "openamrobot-fixed-mast-19dof")
@@ -171,7 +209,7 @@ def load_config(path: Union[str, Path]) -> ACTConfig:
     for k, v in data.items():
         if hasattr(cfg, k):
             setattr(cfg, k, v)
-    return cfg
+    return cfg.validate()
 
 
 def save_config(config: ACTConfig, path: Union[str, Path]) -> None:
@@ -195,6 +233,7 @@ def save_config(config: ACTConfig, path: Union[str, Path]) -> None:
             "latent_dim": config.latent_dim,
             "dropout": config.dropout,
             "vision_backbone": config.vision_backbone,
+            "image_size": list(config.image_size),
             "camera_keys": config.camera_keys,
             "channel_names": config.channel_names,
         },
@@ -215,4 +254,3 @@ def save_config(config: ACTConfig, path: Union[str, Path]) -> None:
         },
     }
     path.write_text(yaml.dump(d, sort_keys=False), encoding="utf-8")
-

@@ -13,17 +13,20 @@ Applies ImageNet normalization and temporal chunking (K=100).
 
 from __future__ import annotations
 
+import json
 import logging
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, List, Tuple
 
-import torch
 import numpy as np
-import pyarrow.parquet as pq
-from torch.utils.data import Dataset
+import torch
 import torchvision.transforms as T
+from torch.utils.data import Dataset
 
-from .config import ACTConfig, CANONICAL_CAMERA_KEYS
+from ..dataset_qa.episode import inside, native_metadata, read_rows
+from ..dataset_qa.strict_io import load_data
 
 LOG = logging.getLogger("oa-c11-dataset")
 
@@ -66,207 +69,268 @@ class ImagePreprocessor:
         return self.transform(img_tensor)
 
 
-def find_episode_parquet_files(dataset_path: Path) -> List[Path]:
-    """Locate all episode parquet files within the dataset directory."""
-    dataset_path = Path(dataset_path)
-    parquet_files: List[Path] = []
+@dataclass(frozen=True)
+class NativeEpisode:
+    """An episode identity, even when several episodes share a Parquet file."""
 
-    # Check data/chunk-* or direct data/
-    for pattern in ("data/**/*.parquet", "data/*.parquet", "*.parquet"):
-        found = list(dataset_path.glob(pattern))
-        if found:
-            parquet_files.extend(found)
-
-    # Filter for episode_*.parquet
-    ep_files = [p for p in parquet_files if "episode_" in p.name]
-    ep_files = sorted(list(set(ep_files)), key=lambda p: p.name)
-    return ep_files
+    episode_index: int
+    path: Path
+    metadata: dict
 
 
-def partition_episodes(
-    episode_paths: Sequence[Path],
-    eval_split: float = 0.2,
-    seed: int = 42,
-) -> Tuple[List[Path], List[Path], List[int], List[int]]:
-    """Partition episodes into train and held-out validation sets.
+def find_episode_parquet_files(dataset_path: Path) -> List[NativeEpisode]:
+    """Resolve native data_path and episode metadata, without filename guessing."""
+    root = Path(dataset_path).resolve()
+    info, _, episodes = native_metadata(root)
+    result = []
+    for index, episode in sorted(episodes.items()):
+        if type(index) is not int or index < 0:
+            raise ValueError("Invalid native episode identity")
+        template = info["data_path"]
+        path = inside(
+            root,
+            template.format(
+                episode_index=index,
+                episode_chunk=index // info.get("chunks_size", 1000),
+                chunk_index=episode.get("data/chunk_index", 0),
+                file_index=episode.get("data/file_index", 0),
+            ),
+        )
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing native data artifact: {path}")
+        result.append(NativeEpisode(index, path, episode))
+    return result
 
-    Returns:
-        (train_paths, val_paths, train_indices, val_indices)
-    """
+
+def partition_episodes(episode_paths, eval_split=0.2, seed=42):
+    """Split by actual episode identity; never fall back to training as validation."""
     n = len(episode_paths)
-    if n == 0:
-        return [], [], [], []
-
-    indices = list(range(n))
-    rng = np.random.RandomState(seed)
-    rng.shuffle(indices)
-
-    num_eval = max(1, int(round(n * eval_split))) if n > 1 else 0
-    val_idx = sorted(indices[:num_eval])
-    train_idx = sorted(indices[num_eval:])
-
-    train_paths = [episode_paths[i] for i in train_idx]
-    val_paths = [episode_paths[i] for i in val_idx]
-
-    return train_paths, val_paths, train_idx, val_idx
+    if n < 2 or not 0 < eval_split < 1:
+        raise ValueError("Training requires at least two episodes and a held-out split")
+    indices = np.random.RandomState(seed).permutation(n).tolist()
+    num_eval = min(n - 1, max(1, round(n * eval_split)))
+    val = [episode_paths[i] for i in sorted(indices[:num_eval])]
+    train = [episode_paths[i] for i in sorted(indices[num_eval:])]
+    return train, val, [e.episode_index for e in train], [e.episode_index for e in val]
 
 
-def extract_video_frame(video_path: Path, frame_idx: int) -> Optional[np.ndarray]:
-    """Extract a single frame from an MP4 file as RGB numpy array (H, W, 3)."""
+def extract_video_frame(video_path, frame_idx):
+    """Decode the exact native segment frame ordinal or fail visibly."""
+    import cv2
+
+    cap = cv2.VideoCapture(str(video_path))
     try:
-        import cv2
-
-        cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
-            return None
+            raise ValueError(f"Cannot open camera video: {video_path}")
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
+        ok, frame = cap.read()
+        if (
+            not ok
+            or frame is None
+            or round(cap.get(cv2.CAP_PROP_POS_FRAMES)) != frame_idx + 1
+        ):
+            raise ValueError(f"Cannot decode camera frame {frame_idx}: {video_path}")
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    finally:
         cap.release()
-        if ret and frame is not None:
-            return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    except Exception as exc:
-        LOG.debug("Error decoding frame %d from %s: %s", frame_idx, video_path, exc)
-    return None
+
+
+def _video_binding(root, info, episode, key):
+    template = info["video_path"]
+    index = episode["episode_index"]
+    shared = "{file_index" in template
+    prefix = f"videos/{key}/"
+    if shared and any(
+        prefix + name not in episode
+        for name in ("chunk_index", "file_index", "from_timestamp", "to_timestamp")
+    ):
+        raise ValueError(f"Missing shared-video binding: {key}")
+    path = inside(
+        root,
+        template.format(
+            video_key=key,
+            episode_index=index,
+            episode_chunk=index // info.get("chunks_size", 1000),
+            chunk_index=episode.get(prefix + "chunk_index"),
+            file_index=episode.get(prefix + "file_index"),
+        ),
+    )
+    process = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_frames",
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    if process.stderr.strip():
+        raise ValueError(process.stderr)
+    frames = json.loads(process.stdout)["frames"]
+    # Same half-open native video segment convention as C10. The kth native
+    # episode frame maps to the kth decoded frame within that segment.
+    positions = list(range(len(frames)))
+    if shared:
+        start, end = (
+            episode[prefix + "from_timestamp"],
+            episode[prefix + "to_timestamp"],
+        )
+        positions = [
+            i
+            for i, f in enumerate(frames)
+            if start <= float(f["best_effort_timestamp_time"]) < end
+        ]
+    if len(positions) != episode["length"]:
+        raise ValueError(f"Camera/native frame count mismatch: {key}")
+    return path, positions
 
 
 class MultiCameraACTDataset(Dataset):
-    """Dataset extracting (state, multi-view images, action_chunk) samples."""
+    """Native per-episode vectors plus four required video segments.
+
+    No alias, guessed video path, unreadable-episode skip or zero-image fallback.
+    """
 
     def __init__(
         self,
-        dataset_path: Path,
-        episode_paths: Sequence[Path],
-        config: ACTConfig,
-        load_images: bool = True,
-        normalize_images: bool = True,
-    ) -> None:
-        self.dataset_path = Path(dataset_path)
+        dataset_path,
+        episode_paths,
+        config,
+        load_images=True,
+        normalize_images=True,
+    ):
+        config.validate()
+        import cv2  # noqa: F401 - require the actual training decoder before model startup
+
+        if not load_images:
+            raise ValueError("Visual ACT requires image loading")
+        self.dataset_path = Path(dataset_path).resolve()
         self.episode_paths = list(episode_paths)
         self.config = config
         self.chunk_size = config.chunk_size
-        self.camera_keys = config.camera_keys
-        self.load_images = load_images
-        self.preprocessor = ImagePreprocessor(
-            image_size=config.image_size,
-            normalize=normalize_images,
-        )
-
-        self.samples: List[Dict[str, Any]] = []
+        self.camera_keys = list(config.camera_keys)
+        self.preprocessor = ImagePreprocessor(config.image_size, normalize_images)
+        self.samples = []
         self._load_dataset_index()
+        if not self.samples:
+            raise ValueError("No samples in selected native episodes")
 
-    def _locate_video(self, ep_path: Path, camera_key: str) -> Optional[Path]:
-        """Locate video stream file for an episode and camera head."""
-        ep_stem = ep_path.stem  # e.g. "episode_000000"
-        chunk_name = ep_path.parent.name  # e.g. "chunk-000"
-
-        candidates = [
-            self.dataset_path / "videos" / chunk_name / camera_key / f"{ep_stem}.mp4",
-            self.dataset_path / "videos" / camera_key / f"{ep_stem}.mp4",
-            self.dataset_path / "videos" / chunk_name / f"{camera_key}_{ep_stem}.mp4",
-            self.dataset_path / "videos" / f"{camera_key}_{ep_stem}.mp4",
-        ]
-        for c in candidates:
-            if c.is_file():
-                return c
-        return None
-
-    def _load_dataset_index(self) -> None:
-        """Scan episodes and build sample indexing."""
-        for ep_path in self.episode_paths:
-            try:
-                table = pq.read_table(ep_path)
-            except Exception as exc:
-                LOG.warning("Failed to read parquet file %s: %s", ep_path, exc)
-                continue
-
-            state_col = table.column("observation.state").to_pylist()
-            act_col = table.column("action").to_pylist()
-
-            state_raw = np.array(state_col, dtype=np.float32)
-            act_raw = np.array(act_col, dtype=np.float32)
-            num_rows = len(state_raw)
-            if num_rows < 1:
-                continue
-
-            # Check video paths
-            video_map: Dict[str, Optional[Path]] = {}
-            if self.load_images:
-                for cam in self.camera_keys:
-                    video_map[cam] = self._locate_video(ep_path, cam)
-
-            for t in range(num_rows):
+    def _load_dataset_index(self):
+        info, _, all_episodes = native_metadata(self.dataset_path)
+        for key, dim in (
+            ("observation.state", self.config.state_dim),
+            ("action", self.config.action_dim),
+        ):
+            feature = info["features"][key]
+            if (
+                feature["shape"] != [dim]
+                or feature.get("names") != self.config.channel_names
+            ):
+                raise ValueError(
+                    f"Native {key} shape/names differ from selected profile"
+                )
+        if info["fps"] != self.config.fps:
+            raise ValueError("Native FPS differs from checkpoint configuration")
+        for key in self.camera_keys:
+            if info["features"].get(key, {}).get("dtype") != "video":
+                raise ValueError(f"Missing canonical video feature: {key}")
+        for episode_ref in self.episode_paths:
+            index = episode_ref.episode_index
+            episode = all_episodes[index]
+            sidecars = [
+                path
+                for path in (self.dataset_path / "meta/openamrobot/episodes").glob(
+                    "episode-*"
+                )
+                if path.suffix in (".json", ".yaml", ".yml")
+            ]
+            matching = [
+                load_data(path)
+                for path in sidecars
+                if load_data(path)["native_lerobot"]["episode_index"] == index
+            ]
+            if len(matching) != 1:
+                raise ValueError("Expected one C9 sidecar per selected episode")
+            for key in ("observation.state", "action"):
+                descriptor = matching[0]["native_lerobot"]["features"][key]
+                if descriptor["profile"] != self.config.profile:
+                    raise ValueError("Sidecar profile differs from configured profile")
+                if self.config.state_dim == 16 and any(
+                    d["unit"] != "degree" for d in descriptor["dimensions"]
+                ):
+                    raise ValueError(
+                        "C9 adapter profile requires degree-valued channels"
+                    )
+            findings = []
+            rows = read_rows(
+                self.dataset_path,
+                info,
+                episode,
+                lambda check, status, findings=findings, **kw: findings.append(status),
+                set(all_episodes),
+            )
+            if rows is None or any(status != "PASS" for status in findings):
+                raise ValueError(f"Native data inspection failed for episode {index}")
+            if [r["frame_index"] for r in rows] != list(range(episode["length"])):
+                raise ValueError(
+                    "Native frame order/range differs from episode metadata"
+                )
+            states = np.asarray(
+                [r["observation.state"] for r in rows], dtype=np.float32
+            )
+            actions = np.asarray([r["action"] for r in rows], dtype=np.float32)
+            if (
+                states.shape != (len(rows), self.config.state_dim)
+                or actions.shape != (len(rows), self.config.action_dim)
+                or not np.isfinite(states).all()
+                or not np.isfinite(actions).all()
+            ):
+                raise ValueError("Invalid state/action vectors")
+            videos = {
+                key: _video_binding(self.dataset_path, info, episode, key)
+                for key in self.camera_keys
+            }
+            for t in range(len(rows)):
                 self.samples.append(
-                    {
-                        "ep_path": ep_path,
-                        "time_step": t,
-                        "total_steps": num_rows,
-                        "state": state_raw[t],
-                        "act_raw": act_raw,
-                        "video_map": video_map,
-                    }
+                    dict(
+                        episode_index=index,
+                        time_step=t,
+                        state=states[t],
+                        act_raw=actions,
+                        video_map=videos,
+                    )
                 )
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+    def __getitem__(self, idx):
         sample = self.samples[idx]
-        t = sample["time_step"]
-        total_steps = sample["total_steps"]
-        act_raw = sample["act_raw"]
-
-        # Extract state vector
-        state = torch.from_numpy(sample["state"]).float()
-
-        # Extract target action chunk of length chunk_size
-        K = self.chunk_size
-        act_dim = self.config.action_dim
-        action_chunk = np.zeros((K, act_dim), dtype=np.float32)
-        action_mask = np.zeros(K, dtype=np.float32)
-
-        available_len = min(K, total_steps - t)
-        if available_len > 0:
-            action_chunk[:available_len] = act_raw[t : t + available_len]
-            action_mask[:available_len] = 1.0
-
-        # Pad remaining steps with last valid action
-        if available_len < K:
-            last_act = act_raw[min(t + available_len - 1, total_steps - 1)]
-            action_chunk[available_len:] = last_act
-            # Mask remains 1.0 for action replication or 0.0 for pure padding
-
-        actions_tensor = torch.from_numpy(action_chunk).float()
-        mask_tensor = torch.from_numpy(action_mask).float()
-
-        # Load multi-view images: (num_cameras, 3, H, W)
-        num_cams = len(self.camera_keys)
-        H, W = self.config.image_size
-        cam_tensors: List[torch.Tensor] = []
-
-        if self.load_images and sample["video_map"]:
-            for cam in self.camera_keys:
-                v_path = sample["video_map"].get(cam)
-                frame = None
-                if v_path is not None and v_path.is_file():
-                    frame = extract_video_frame(v_path, t)
-
-                if frame is not None:
-                    # Convert (H, W, 3) uint8 to (3, H, W) float
-                    t_frame = torch.from_numpy(frame.transpose(2, 0, 1)).float() / 255.0
-                    processed = self.preprocessor(t_frame)
-                else:
-                    # Synthetic / placeholder frame
-                    processed = torch.zeros((3, H, W), dtype=torch.float32)
-                cam_tensors.append(processed)
-        else:
-            for _ in range(num_cams):
-                cam_tensors.append(torch.zeros((3, H, W), dtype=torch.float32))
-
-        images_tensor = torch.stack(cam_tensors, dim=0)  # (num_cams, 3, H, W)
-
+        t, actions = sample["time_step"], sample["act_raw"]
+        count = min(self.chunk_size, len(actions) - t)
+        chunk = np.zeros((self.chunk_size, self.config.action_dim), dtype=np.float32)
+        chunk[:count] = actions[t : t + count]
+        mask = torch.arange(self.chunk_size) < count
+        images = []
+        for key in self.camera_keys:
+            path, positions = sample["video_map"][key]
+            frame = extract_video_frame(path, positions[t])
+            images.append(
+                self.preprocessor(torch.from_numpy(frame.transpose(2, 0, 1).copy()))
+            )
         return {
-            "state": state,
-            "images": images_tensor,
-            "actions": actions_tensor,
-            "action_mask": mask_tensor,
+            "state": torch.from_numpy(sample["state"]),
+            "images": torch.stack(images),
+            "actions": torch.from_numpy(chunk),
+            "action_mask": mask,
         }

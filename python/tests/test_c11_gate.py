@@ -1,194 +1,287 @@
 # SPDX-License-Identifier: MIT
-"""Unit tests for C11 fail-closed pre-flight training gate."""
-
-from __future__ import annotations
+"""C11 startup fault injection. PASS envelopes are fabricated protocol tests."""
 
 import json
+from copy import deepcopy
 from pathlib import Path
-import tempfile
-import unittest
+from unittest.mock import patch
 
-from oa_embodied_ai.training.gate import (
-    GateStatus,
-    TrainingBlockedError,
-    verify_training_gate,
-)
+import pytest
+from oa_embodied_ai.dataset_qa import episode as c10
+from oa_embodied_ai.training.cli import train_act
+from oa_embodied_ai.training.config import get_profile_config
+from oa_embodied_ai.training.gate import TrainingBlockedError, verify_training_gate
+from oa_embodied_ai.training.inputs import file_sha256, inventory
+from test_c10_handoff import protocol_envelope
 
 
-def make_valid_robot_report() -> dict:
-    return {
-        "report_version": 1,
-        "status": "PASS",
-        "quality_status": "PASS",
-        "exit_code": 0,
-        "training_ready": True,
-        "source_profile": "ROBOT",
-        "provenance": {
-            "source_profile": "ROBOT",
-            "c9_contract": {"sha256": "692e04693bc738033af1da10f98e029f342497ddaeae4792945f829335f1938e"},
-        },
-        "findings": [
-            {"check_id": "C10_SCHEMA", "status": "PASS", "severity": "INFO"},
-            {"check_id": "C10_REAL_EPISODE", "status": "PASS", "severity": "INFO", "observed": "actual"},
-        ],
-        "episodes": [
-            {"episode_index": 0, "status": "PASS", "data_origin": "actual"},
-        ],
+@pytest.fixture
+def protocol(tmp_path):
+    """No real recording: mock checker output to exercise consumer/startup wiring."""
+    root = tmp_path / "dataset"
+    root.mkdir()
+    (root / "sidecar.json").write_text('{"purpose":"fabricated protocol envelope"}')
+    policy = tmp_path / "policy.json"
+    policy.write_text('{"purpose":"fabricated protocol test"}')
+    manifest = {
+        "manifest_version": 1,
+        "dataset_id": "protocol-test",
+        "dataset_revision": "v1",
+        "episode_indices": [0],
+        "data_origin": "actual",
+        "profile": "lerobot-v0.6.1-bi-openarm-position",
+        "evidence": "FABRICATED PROTOCOL TEST ONLY; no real acceptance",
+        "policy_sha256": file_sha256(policy),
+        "files_sha256": inventory(root),
     }
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    report = protocol_envelope()
+    report["provenance"]["policy"]["sha256"] = file_sha256(policy)
+    report["provenance"]["checker_files_sha256"] = {
+        name: file_sha256(Path(c10.__file__).parent / name)
+        for name in (
+            "episode.py",
+            "semantics.py",
+            "strict_io.py",
+            "contract.py",
+            "handoff.py",
+        )
+    }
+    report["episodes"][0]["sidecar"] = {
+        "path": "sidecar.json",
+        "sha256": file_sha256(root / "sidecar.json"),
+    }
+    return root, policy, manifest_path, report
 
 
-class TestC11TrainingGate(unittest.TestCase):
-    def test_valid_robot_report_passes(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            report_file = Path(tmpdir) / "qa_report.json"
-            report_file.write_text(json.dumps(make_valid_robot_report()), encoding="utf-8")
+def test_complete_canonical_decision_is_consumed(protocol):
+    root, policy, manifest, report = protocol
+    from oa_embodied_ai.dataset_qa import training_readiness
 
-            status = verify_training_gate(Path(tmpdir), qa_report_path=report_file)
-            self.assertIsInstance(status, GateStatus)
-            self.assertTrue(status.training_ready)
-            self.assertEqual(status.source_profile, "ROBOT")
-            self.assertFalse(status.is_synthetic_override)
-            self.assertEqual(status["quality_status"], "PASS")
+    with (
+        patch.object(c10, "check_dataset", return_value=report) as checker,
+        patch(
+            "oa_embodied_ai.training.gate.training_readiness", wraps=training_readiness
+        ) as decision,
+    ):
+        status = verify_training_gate(
+            root, input_manifest_path=manifest, policy_path=policy
+        )
+    assert status.training_ready and not status.is_synthetic_override
+    checker.assert_called_once_with(root.resolve(), policy, [0])
+    decision.assert_called_once_with(
+        report, dataset_id="protocol-test", dataset_revision="v1", episode_indices=[0]
+    )
+    assert report["production_acceptance"] == "NOT_VERIFIED"
 
-    def test_missing_report_raises_training_blocked_error(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            missing_file = Path(tmpdir) / "nonexistent_qa.json"
-            with self.assertRaises(TrainingBlockedError) as ctx:
-                verify_training_gate(Path(tmpdir), qa_report_path=missing_file)
-            self.assertEqual(ctx.exception.exit_code, 2)
-            self.assertEqual(ctx.exception.code, 2)
 
-    def test_corrupted_json_report_raises_training_blocked_error(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            report_file = Path(tmpdir) / "corrupted_qa.json"
-            report_file.write_text("{ this is not valid json", encoding="utf-8")
-            with self.assertRaises(TrainingBlockedError) as ctx:
-                verify_training_gate(Path(tmpdir), qa_report_path=report_file)
-            self.assertEqual(ctx.exception.exit_code, 2)
+def remove_check(report, name):
+    report["findings"] = [f for f in report["findings"] if f["check_id"] != name]
 
-    def test_training_ready_false_or_missing_raises_training_blocked_error(self):
-        for bad_val in (False, None, "true", 1):
-            with self.subTest(bad_val=bad_val):
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    report = make_valid_robot_report()
-                    if bad_val is None:
-                        del report["training_ready"]
-                    else:
-                        report["training_ready"] = bad_val
-                    report_file = Path(tmpdir) / "qa_report.json"
-                    report_file.write_text(json.dumps(report), encoding="utf-8")
 
-                    with self.assertRaises(TrainingBlockedError) as ctx:
-                        verify_training_gate(Path(tmpdir), qa_report_path=report_file)
-                    self.assertEqual(ctx.exception.exit_code, 2)
+def mutate(report, fault):
+    if fault == "missing_report":
+        return None
+    if fault == "missing_findings":
+        report.pop("findings")
+    elif fault == "empty_findings":
+        report["findings"] = []
+    elif fault == "blocked_overall_pass":
+        report["quality_status"] = "BLOCKED"
+    elif fault == "blocked_status_quality_pass":
+        report.update(status="BLOCKED", quality_status="PASS")
+    elif fault == "reject_ready_true":
+        report["findings"][0]["status"] = "REJECT"
+    elif fault == "not_verified":
+        report["status"] = "NOT_VERIFIED"
+    elif fault == "synthetic_labelled_robot":
+        report["source_profile"] = "ROBOT"
+        report["episodes"][0]["data_origin"] = "synthetic"
+    elif fault in ("dataset_id", "dataset_revision"):
+        report["episodes"][0]["binding"][fault] = "unrelated"
+    elif fault == "selected_episode":
+        report["episodes"][0]["episode_index"] = 7
+    elif fault == "real_episode":
+        remove_check(report, "C10_REAL_EPISODE")
+    elif fault == "canonical_c9":
+        report["provenance"]["c9_contract"] = None
+    elif fault == "policy_missing":
+        report["provenance"]["policy"] = None
+    elif fault == "policy_unapproved":
+        report["provenance"]["policy"]["approved"] = False
+    elif fault == "diagnostic_coverage":
+        remove_check(report, "C10_VIDEO")
+    elif fault == "exit_missing":
+        report.pop("exit_code")
+    elif fault == "exit_invalid":
+        report["exit_code"] = False
+    elif fault == "checker_provenance":
+        report["provenance"]["checker_files_sha256"]["episode.py"] = "0" * 64
+    elif fault == "policy_provenance":
+        report["provenance"]["policy"]["sha256"] = "0" * 64
+    elif fault == "sidecar_provenance":
+        report["episodes"][0]["sidecar"]["sha256"] = "0" * 64
+    elif fault == "report_version":
+        report["report_version"] = True
+    elif fault == "malformed_findings":
+        report["findings"] = [None]
+    elif fault == "rejected_severity":
+        report["findings"][0]["severity"] = "REJECT"
+    elif fault == "registry_only":
+        return {"dataset_id": "protocol-test", "quality_status": "passed"}
+    return report
 
-    def test_quality_status_blocked_reject_not_verified_raises(self):
-        for bad_status in ("BLOCKED", "REJECT", "NOT_VERIFIED", "FAILED"):
-            with self.subTest(bad_status=bad_status):
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    report = make_valid_robot_report()
-                    report["quality_status"] = bad_status
-                    report["status"] = bad_status
-                    report_file = Path(tmpdir) / "qa_report.json"
-                    report_file.write_text(json.dumps(report), encoding="utf-8")
 
-                    with self.assertRaises(TrainingBlockedError) as ctx:
-                        verify_training_gate(Path(tmpdir), qa_report_path=report_file)
-                    self.assertEqual(ctx.exception.exit_code, 2)
+FAULTS = [
+    "missing_report",
+    "missing_findings",
+    "empty_findings",
+    "blocked_overall_pass",
+    "blocked_status_quality_pass",
+    "reject_ready_true",
+    "not_verified",
+    "synthetic_labelled_robot",
+    "dataset_id",
+    "dataset_revision",
+    "selected_episode",
+    "real_episode",
+    "canonical_c9",
+    "policy_missing",
+    "policy_unapproved",
+    "diagnostic_coverage",
+    "exit_missing",
+    "exit_invalid",
+    "checker_provenance",
+    "policy_provenance",
+    "sidecar_provenance",
+    "report_version",
+    "malformed_findings",
+    "rejected_severity",
+    "registry_only",
+]
 
-    def test_contradictory_finding_severity_reject_blocks_training(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            report = make_valid_robot_report()
-            report["findings"].append(
-                {"check_id": "C10_SKEW_CRITICAL", "status": "FAIL", "severity": "REJECT"}
+
+@pytest.mark.parametrize("fault", FAULTS)
+def test_rejected_evidence_stops_before_model_training(protocol, tmp_path, fault):
+    root, policy, manifest, report = protocol
+    output = tmp_path / "run"
+    report = mutate(deepcopy(report), fault)
+    with (
+        patch.object(c10, "check_dataset", return_value=report),
+        patch("oa_embodied_ai.training.cli.ACTPolicy") as model,
+    ):
+        with pytest.raises(TrainingBlockedError) as error:
+            train_act(
+                root,
+                get_profile_config("lerobot-v0.6.1-bi-openarm-position"),
+                output_dir=output,
+                input_manifest_path=manifest,
+                policy_path=policy,
+                allow_synthetic_eval=True,
             )
-            report_file = Path(tmpdir) / "qa_report.json"
-            report_file.write_text(json.dumps(report), encoding="utf-8")
+        assert error.value.code == error.value.exit_code == 2
+        model.assert_not_called()
+    assert not list(tmp_path.rglob("*.pt"))
+    assert not list(tmp_path.rglob("c11_training_summary.json"))
 
-            with self.assertRaises(TrainingBlockedError) as ctx:
-                verify_training_gate(Path(tmpdir), qa_report_path=report_file)
-            self.assertEqual(ctx.exception.exit_code, 2)
 
-    def test_contradictory_finding_status_reject_blocks_training(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            report = make_valid_robot_report()
-            report["findings"].append(
-                {"check_id": "C10_BOUNDS_CHECK", "status": "REJECT", "severity": "ERROR"}
+def test_missing_or_stale_supplied_report_blocks(protocol, tmp_path):
+    root, policy, manifest, report = protocol
+    old = tmp_path / "old.json"
+    with (
+        patch.object(c10, "check_dataset", return_value=report),
+        patch("oa_embodied_ai.training.cli.ACTPolicy") as model,
+    ):
+        for payload in (None, {}, {"status": "PASS"}):
+            if payload is not None:
+                old.write_text(json.dumps(payload))
+            with pytest.raises(TrainingBlockedError):
+                train_act(
+                    root,
+                    get_profile_config("lerobot-v0.6.1-bi-openarm-position"),
+                    qa_report_path=old,
+                    output_dir=tmp_path / "run",
+                    input_manifest_path=manifest,
+                    policy_path=policy,
+                )
+        model.assert_not_called()
+
+
+def test_dataset_modified_after_report_is_blocked(protocol, tmp_path):
+    root, policy, manifest, report = protocol
+    old = tmp_path / "old.json"
+    old.write_text(json.dumps(report))
+    (root / "sidecar.json").write_text("changed after QA")
+    with (
+        patch.object(c10, "check_dataset") as checker,
+        patch("oa_embodied_ai.training.cli.ACTPolicy") as model,
+    ):
+        with pytest.raises(TrainingBlockedError):
+            train_act(
+                root,
+                get_profile_config("lerobot-v0.6.1-bi-openarm-position"),
+                qa_report_path=old,
+                output_dir=tmp_path / "run",
+                input_manifest_path=manifest,
+                policy_path=policy,
             )
-            report_file = Path(tmpdir) / "qa_report.json"
-            report_file.write_text(json.dumps(report), encoding="utf-8")
+        checker.assert_not_called()
+        model.assert_not_called()
 
-            with self.assertRaises(TrainingBlockedError) as ctx:
-                verify_training_gate(Path(tmpdir), qa_report_path=report_file)
-            self.assertEqual(ctx.exception.exit_code, 2)
 
-    def test_source_profile_non_robot_fails_closed_by_default(self):
-        for synthetic_profile in ("GAZEBO", "SYNTHETIC", "MOCK", "DIAGNOSTICS"):
-            with self.subTest(profile=synthetic_profile):
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    report = make_valid_robot_report()
-                    report["source_profile"] = synthetic_profile
-                    report["provenance"]["source_profile"] = synthetic_profile
-                    report_file = Path(tmpdir) / "qa_report.json"
-                    report_file.write_text(json.dumps(report), encoding="utf-8")
-
-                    with self.assertRaises(TrainingBlockedError) as ctx:
-                        verify_training_gate(Path(tmpdir), qa_report_path=report_file, allow_synthetic_override=False)
-                    self.assertEqual(ctx.exception.exit_code, 2)
-
-    def test_source_profile_synthetic_override_succeeds_with_warning(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            report = make_valid_robot_report()
-            report["source_profile"] = "SYNTHETIC"
-            report["provenance"]["source_profile"] = "SYNTHETIC"
-            report_file = Path(tmpdir) / "qa_report.json"
-            report_file.write_text(json.dumps(report), encoding="utf-8")
-
-            status = verify_training_gate(
-                Path(tmpdir),
-                qa_report_path=report_file,
-                allow_synthetic_override=True,
+def test_no_gate_clearance_or_trusted_inputs_blocks(protocol, tmp_path):
+    root, _, _, _ = protocol
+    with patch("oa_embodied_ai.training.cli.ACTPolicy") as model:
+        with pytest.raises(TrainingBlockedError):
+            train_act(
+                root,
+                get_profile_config("lerobot-v0.6.1-bi-openarm-position"),
+                output_dir=tmp_path / "run",
             )
-            self.assertTrue(status.training_ready)
-            self.assertTrue(status.is_synthetic_override)
-            self.assertEqual(status.source_profile, "SYNTHETIC")
+        model.assert_not_called()
 
-    def test_nonzero_exit_code_in_report_blocks_training(self):
-        for bad_code in (1, 2, "0"):
-            with self.subTest(bad_code=bad_code):
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    report = make_valid_robot_report()
-                    report["exit_code"] = bad_code
-                    report_file = Path(tmpdir) / "qa_report.json"
-                    report_file.write_text(json.dumps(report), encoding="utf-8")
 
-                    with self.assertRaises(TrainingBlockedError) as ctx:
-                        verify_training_gate(Path(tmpdir), qa_report_path=report_file)
-                    self.assertEqual(ctx.exception.exit_code, 2)
+def test_unrelated_working_directory_report_is_never_reused(
+    protocol, tmp_path, monkeypatch
+):
+    root, policy, manifest, report = protocol
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports/qa_report.json").write_text(json.dumps(report))
+    monkeypatch.chdir(tmp_path)
+    with patch.object(c10, "check_dataset", return_value=None) as checker:
+        with pytest.raises(TrainingBlockedError):
+            verify_training_gate(root, input_manifest_path=manifest, policy_path=policy)
+        checker.assert_called_once()
 
-    def test_mutation_reversion_corrupt_gate_logic(self):
-        """Mutation test: Assert that reverting fail-closed checks fails the gate contract."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Payload with contradictory finding: top-level PASS but finding REJECT
-            contradictory = make_valid_robot_report()
-            contradictory["findings"].append(
-                {"check_id": "MUTATION_TEST", "status": "FAIL", "severity": "REJECT"}
+
+def test_input_mutation_during_checker_blocks_startup(protocol, tmp_path):
+    root, policy, manifest, report = protocol
+
+    def mutate_while_checking(snapshot, policy_copy, indices):
+        (snapshot / "sidecar.json").write_text("mutated while checker ran")
+        return report
+
+    with (
+        patch.object(c10, "check_dataset", side_effect=mutate_while_checking),
+        patch("oa_embodied_ai.training.cli.ACTPolicy") as model,
+    ):
+        with pytest.raises(TrainingBlockedError):
+            train_act(
+                root,
+                get_profile_config("lerobot-v0.6.1-bi-openarm-position"),
+                output_dir=tmp_path / "run",
+                input_manifest_path=manifest,
+                policy_path=policy,
             )
-            report_file = Path(tmpdir) / "qa_report.json"
-            report_file.write_text(json.dumps(contradictory), encoding="utf-8")
-
-            # Contract requires verify_training_gate to raise TrainingBlockedError
-            with self.assertRaises(TrainingBlockedError) as ctx:
-                verify_training_gate(Path(tmpdir), qa_report_path=report_file)
-            self.assertEqual(ctx.exception.exit_code, 2)
-
-            # A mutated/corrupt gate logic (e.g. naive top-level check only) would erroneously pass:
-            def naive_mutated_gate(rep):
-                return rep.get("status") == "PASS"
-
-            self.assertTrue(naive_mutated_gate(contradictory), "Mutant gate erroneously accepted contradictory report")
+        model.assert_not_called()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
+def test_gate_itself_rejects_missing_diagnostics(protocol):
+    root, policy, manifest, report = protocol
+    remove_check(report, "C10_VIDEO")
+    with (
+        patch.object(c10, "check_dataset", return_value=report),
+        pytest.raises(TrainingBlockedError),
+    ):
+        verify_training_gate(root, input_manifest_path=manifest, policy_path=policy)

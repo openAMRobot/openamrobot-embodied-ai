@@ -2,9 +2,9 @@
 # OpenAMRobot 2.0 | Deliverable C11 (ACT Imitation Baseline)
 # configs/c11_act_default.yaml
 #
-# Pinned to:
+# Historical software experiment; no production profile/release approval:
 #   - profile: openamrobot-fixed-mast-19dof (schema-v1.0-frozen, rev18.2)
-#   - 19-channel whole-body state/action space (3 base, 2 fixed torso [0,0], 14 arm/grippers)
+#   - 19-channel historical state/action space (3 base, 2 structural, 12 arm, 2 grippers)
 #   - C9 canonical camera keys (head, base, camera_wrist_left, camera_wrist_right)
 #   - chunk_size = 100 frames (3.33 seconds @ 30 Hz)
 # =============================================================================
@@ -52,6 +52,7 @@ loss:
   kl_weight: 10.0
 
 preflight_gate:
+  # Informational only: the CLI always enforces fresh canonical C10 QA.
   mandatory: true
   gate_source: "dataset_qa"
   require_source_profile: "ROBOT"

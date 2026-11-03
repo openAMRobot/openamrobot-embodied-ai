@@ -25,3 +25,7 @@ rosbag2_*/
 checkpoints/
 outputs/
 reports/
+
+# Local verification environments
+.venv/
+.ruff_cache/

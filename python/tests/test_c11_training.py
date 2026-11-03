@@ -1,280 +1,333 @@
 # SPDX-License-Identifier: MIT
-"""Unit tests for Deliverable C11 ACT Policy Training Engine."""
-
-from __future__ import annotations
+"""Executed native media, model conditioning and CPU software-test regressions."""
 
 import json
-from pathlib import Path
-import tempfile
-import unittest
+import subprocess
+from unittest.mock import patch
 
 import pytest
-
-torch = pytest.importorskip("torch", reason="PyTorch required for C11 training tests")
-torchvision = pytest.importorskip("torchvision", reason="Torchvision required for C11 dataset tests")
-pyarrow = pytest.importorskip("pyarrow", reason="PyArrow required for parquet dataset tests")
-
-import numpy as np
-import pyarrow as pa
-import pyarrow.parquet as pq
-
+import torch
+from oa_embodied_ai.dataset_qa.contract import c9_asset
+from oa_embodied_ai.dataset_qa.strict_io import load_data
+from oa_embodied_ai.training.cli import train_act
 from oa_embodied_ai.training.config import (
-    ACTConfig,
     CANONICAL_CAMERA_KEYS,
-    OPENAMROBOT_19DOF_CHANNELS,
-    LEROBOT_16DOF_CHANNELS,
     get_profile_config,
     load_config,
     save_config,
 )
 from oa_embodied_ai.training.dataset import (
-    IMAGENET_MEAN,
-    IMAGENET_STD,
     ImagePreprocessor,
     MultiCameraACTDataset,
     find_episode_parquet_files,
     partition_episodes,
 )
+from oa_embodied_ai.training.gate import TrainingBlockedError, verify_training_gate
+from oa_embodied_ai.training.inputs import file_sha256
 from oa_embodied_ai.training.model import ACTPolicy
-from oa_embodied_ai.training.cli import train_act
 
 
-def create_dummy_dataset(root: Path, num_episodes: int = 3, num_steps: int = 20) -> Path:
-    """Create a minimal mock LeRobotDataset v3.0 directory for tests."""
-    data_dir = root / "data" / "chunk-000"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    meta_dir = root / "meta"
-    meta_dir.mkdir(parents=True, exist_ok=True)
+def test_c9_profile_names_units_and_order_are_exact():
+    example = load_data(c9_asset("schemas/yaml/c9-lerobot-dataset-valid.yaml"))
+    cfg = get_profile_config("lerobot-v0.6.1-bi-openarm-position")
+    for key in ("observation.state", "action"):
+        dims = example["native_lerobot"]["features"][key]["dimensions"]
+        assert cfg.channel_names == [d["name"] for d in dims]
+        assert {d["unit"] for d in dims} == {"degree"}
+    historical = get_profile_config("openamrobot-fixed-mast-19dof")
+    assert len(historical.channel_names) == 19
+    assert historical.channel_names[3:5] == ["torso_pitch", "torso_yaw"]
+    assert historical.channel_names[5:12] == [
+        "left_shoulder_pan",
+        "left_shoulder_lift",
+        "left_elbow_flex",
+        "left_wrist_flex",
+        "left_wrist_roll",
+        "left_wrist_yaw",
+        "left_gripper",
+    ]
+    assert all(
+        "lift_joint" != name for name in cfg.channel_names + historical.channel_names
+    )
 
-    info = {
-        "codebase_version": "v3.0",
-        "robot_type": "openamrobot_2",
-        "fps": 30,
-        "profile": "openamrobot-fixed-mast-19dof",
-        "schema_revision": "schema-v1.0-frozen",
-    }
-    (meta_dir / "info.json").write_text(json.dumps(info), encoding="utf-8")
 
-    for ep_idx in range(num_episodes):
-        states = np.zeros((num_steps, 19), dtype=np.float32)
-        actions = np.zeros((num_steps, 19), dtype=np.float32)
-        # Small non-zero variations
-        states[:, 5:19] = np.sin(np.linspace(0, 1, num_steps)[:, None])
-        actions[:, 5:19] = np.cos(np.linspace(0, 1, num_steps)[:, None])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("state_dim", 19),
+        ("action_dim", 19),
+        ("channel_names", ["alias"] * 16),
+        ("camera_keys", CANONICAL_CAMERA_KEYS[::-1]),
+        ("camera_keys", ["observation.images.camera_scene"] * 4),
+        ("chunk_size", 0),
+        ("eval_split", 0),
+        ("vision_backbone", "unimplemented"),
+    ],
+)
+def test_unsupported_profile_or_config_mix_is_rejected(tiny_config, field, value):
+    setattr(tiny_config, field, value)
+    with pytest.raises(ValueError):
+        ACTPolicy(tiny_config)
 
-        table = pa.Table.from_arrays(
-            [
-                pa.array(states.tolist(), type=pa.list_(pa.float32(), 19)),
-                pa.array(actions.tolist(), type=pa.list_(pa.float32(), 19)),
-                pa.array(list(range(num_steps)), type=pa.int64()),
-            ],
-            names=["observation.state", "action", "frame_index"],
+
+def test_configuration_roundtrip_preserves_preprocessing(tiny_config, tmp_path):
+    path = tmp_path / "config.yaml"
+    save_config(tiny_config, path)
+    loaded = load_config(path)
+    assert loaded.to_dict() == tiny_config.to_dict()
+    img = torch.ones(3, 64, 48)
+    processed = ImagePreprocessor((32, 32))(img)
+    assert processed.shape == (3, 32, 32)
+    assert processed[0, 0, 0].item() == pytest.approx((1 - 0.485) / 0.229)
+
+
+def test_shared_native_files_use_episode_rows_and_video_segments(
+    synthetic_inputs, tiny_config
+):
+    root, _, _ = synthetic_inputs
+    episodes = find_episode_parquet_files(root)
+    assert [e.episode_index for e in episodes] == [0, 1]
+    assert (
+        episodes[0].path == episodes[1].path
+    )  # v3 shared Parquet, no episode_* filename.
+    dataset = MultiCameraACTDataset(root, episodes, tiny_config)
+    assert len(dataset) == 4
+    sample = dataset[2]  # First frame of episode 1, inside shared video.
+    assert sample["images"].shape == (4, 3, 32, 32)
+    assert sample["actions"].shape == (3, 16)
+    assert sample["action_mask"].tolist() == [True, True, False]
+    assert sample["actions"][2].eq(0).all()
+    assert [
+        dataset.samples[2]["video_map"][k][1][0] for k in tiny_config.camera_keys
+    ] == [2] * 4
+    assert not torch.equal(sample["images"][0], sample["images"][1])
+    assert dataset[3]["action_mask"].tolist() == [True, False, False]
+    assert dataset.samples[2]["episode_index"] == 1
+
+
+def test_split_uses_actual_noncontiguous_episode_ids(synthetic_inputs):
+    from dataclasses import replace
+
+    root, _, _ = synthetic_inputs
+    episodes = find_episode_parquet_files(root)
+    episodes = [
+        replace(episodes[0], episode_index=4),
+        replace(episodes[1], episode_index=19),
+    ]
+    _, _, train, val = partition_episodes(episodes, seed=42)
+    assert set(train + val) == {4, 19} and not set(train) & set(val)
+    assert partition_episodes(episodes, seed=42)[2:] == (train, val)
+    with pytest.raises(ValueError):
+        partition_episodes(episodes[:1])
+
+
+def test_missing_camera_cannot_be_replaced_by_zero_images(
+    synthetic_inputs, tiny_config
+):
+    root, _, _ = synthetic_inputs
+    video = next((root / "videos" / CANONICAL_CAMERA_KEYS[0]).rglob("*.mp4"))
+    video.unlink()
+    with pytest.raises(subprocess.CalledProcessError):
+        MultiCameraACTDataset(root, find_episode_parquet_files(root), tiny_config)
+
+
+def test_missing_or_corrupt_decode_cannot_be_hidden(synthetic_inputs, tiny_config):
+    root, _, _ = synthetic_inputs
+    dataset = MultiCameraACTDataset(root, find_episode_parquet_files(root), tiny_config)
+    with patch(
+        "oa_embodied_ai.training.dataset.extract_video_frame",
+        side_effect=ValueError("decoder failed"),
+    ):
+        with pytest.raises(ValueError, match="decoder failed"):
+            dataset[0]
+    with pytest.raises(ValueError, match="requires image"):
+        MultiCameraACTDataset(
+            root, find_episode_parquet_files(root), tiny_config, load_images=False
         )
-        pq.write_table(table, data_dir / f"episode_{ep_idx:06d}.parquet")
-
-    return root
 
 
-class TestC11Training(unittest.TestCase):
-    def test_kinematic_profiles(self):
-        cfg19 = get_profile_config("openamrobot-fixed-mast-19dof")
-        self.assertEqual(cfg19.state_dim, 19)
-        self.assertEqual(cfg19.action_dim, 19)
-        self.assertEqual(len(cfg19.channel_names), 19)
-        self.assertEqual(cfg19.channel_names, OPENAMROBOT_19DOF_CHANNELS)
+def test_every_camera_affects_prediction_and_receives_gradient(tiny_config):
+    torch.manual_seed(42)
+    model = ACTPolicy(tiny_config).eval()
+    images = torch.randn(1, 4, 3, 32, 32, requires_grad=True)
+    state = torch.zeros(1, 16)
+    prediction, mu, logvar = model(state, images)
+    assert prediction.shape == (1, 3, 16) and mu is logvar is None
+    prediction.square().sum().backward()
+    assert all(images.grad[0, i].abs().sum() > 0 for i in range(4))
+    with torch.no_grad():
+        for camera in range(4):
+            altered = images.detach().clone()
+            altered[:, camera] = 0
+            assert not torch.allclose(model(state, altered)[0], prediction)
+    with pytest.raises(ValueError, match="no state-only fallback"):
+        model(state)
 
-        cfg16 = get_profile_config("lerobot-v0.6.1-bi-openarm-position")
-        self.assertEqual(cfg16.state_dim, 16)
-        self.assertEqual(cfg16.action_dim, 16)
-        self.assertEqual(len(cfg16.channel_names), 16)
-        self.assertEqual(cfg16.channel_names, LEROBOT_16DOF_CHANNELS)
 
-        with self.assertRaises(ValueError):
-            get_profile_config("unsupported-profile-42dof")
+def test_cvae_masks_padded_actions_and_loss(tiny_config):
+    model = ACTPolicy(tiny_config).eval()
+    state, actions = torch.zeros(1, 16), torch.randn(1, 3, 16)
+    mask = torch.tensor([[True, False, False]])
+    first = model.cvae_encoder(state, actions, mask)
+    actions[:, 1:] += 1000
+    second = model.cvae_encoder(state, actions, mask)
+    assert all(torch.allclose(a, b) for a, b in zip(first, second, strict=True))
+    prediction = actions.clone()
+    prediction[:, 1:] -= 9000
+    loss = model.compute_loss(prediction, actions, None, None, mask)
+    assert loss["loss"].item() == 0
 
-    def test_config_yaml_serialization(self):
-        cfg = get_profile_config("openamrobot-fixed-mast-19dof")
-        cfg.epochs = 15
-        cfg.d_model = 128
-        with tempfile.TemporaryDirectory() as tmpdir:
-            yaml_path = Path(tmpdir) / "test_cfg.yaml"
-            save_config(cfg, yaml_path)
-            loaded = load_config(yaml_path)
-            self.assertEqual(loaded.profile, cfg.profile)
-            self.assertEqual(loaded.epochs, 15)
-            self.assertEqual(loaded.d_model, 128)
-            self.assertEqual(loaded.state_dim, 19)
 
-    def test_image_preprocessor_normalization(self):
-        preproc = ImagePreprocessor(image_size=(224, 224), normalize=True)
-        ones_img = torch.ones((3, 224, 224), dtype=torch.float32)
-        out = preproc(ones_img)
-        self.assertEqual(out.shape, (3, 224, 224))
+@pytest.mark.parametrize(
+    "profile", ["lerobot-v0.6.1-bi-openarm-position", "openamrobot-fixed-mast-19dof"]
+)
+def test_both_profiles_forward_without_dimension_adaptation(profile):
+    cfg = get_profile_config(profile)
+    cfg.d_model, cfg.n_heads, cfg.chunk_size = 32, 4, 2
+    cfg.enc_layers = cfg.dec_layers = 1
+    model = ACTPolicy(cfg).eval()
+    with torch.no_grad():
+        output, _, _ = model(
+            torch.zeros(1, cfg.state_dim), torch.randn(1, 4, 3, 32, 32)
+        )
+    assert output.shape == (1, 2, cfg.action_dim)
+    with pytest.raises(ValueError):
+        model(torch.zeros(1, 17), torch.randn(1, 4, 3, 32, 32))
 
-        # Check normalization matches ImageNet constants
-        expected_ch0 = (1.0 - IMAGENET_MEAN[0]) / IMAGENET_STD[0]
-        expected_ch1 = (1.0 - IMAGENET_MEAN[1]) / IMAGENET_STD[1]
-        expected_ch2 = (1.0 - IMAGENET_MEAN[2]) / IMAGENET_STD[2]
 
-        self.assertAlmostEqual(out[0, 0, 0].item(), expected_ch0, places=3)
-        self.assertAlmostEqual(out[1, 0, 0].item(), expected_ch1, places=3)
-        self.assertAlmostEqual(out[2, 0, 0].item(), expected_ch2, places=3)
+def test_synthetic_override_preserves_raw_c10_block(synthetic_inputs):
+    root, policy, manifest = synthetic_inputs
+    with pytest.raises(TrainingBlockedError):
+        verify_training_gate(root, input_manifest_path=manifest, policy_path=policy)
+    status = verify_training_gate(
+        root,
+        input_manifest_path=manifest,
+        policy_path=policy,
+        allow_synthetic_override=True,
+    )
+    assert status.is_synthetic_override and not status.training_ready
+    assert status.quality_status == status.qa_report["status"] == "NOT_VERIFIED"
+    assert status.qa_report["exit_code"] == 2
+    assert status.qa_report["production_acceptance"] == "NOT_VERIFIED"
 
-    def test_mutation_reversion_image_normalization_contract(self):
-        """Mutation test: Deleting or disabling normalization must fail the contract."""
-        preproc_norm = ImagePreprocessor(image_size=(224, 224), normalize=True)
-        preproc_unnorm = ImagePreprocessor(image_size=(224, 224), normalize=False)
 
-        img = torch.ones((3, 224, 224), dtype=torch.float32)
-        out_norm = preproc_norm(img)
-        out_unnorm = preproc_unnorm(img)
+@pytest.mark.parametrize(
+    "fault", ["native_data", "camera", "policy", "native_dependencies", "forged_robot"]
+)
+def test_real_native_failures_block_before_model_even_with_override(
+    synthetic_inputs, tiny_config, rebind, tmp_path, fault
+):
+    from contextlib import nullcontext
 
-        # Unnormalized image maintains value 1.0
-        self.assertAlmostEqual(out_unnorm[0, 0, 0].item(), 1.0, places=4)
-        # Normalized image must diverge from raw 1.0
-        self.assertNotAlmostEqual(out_norm[0, 0, 0].item(), 1.0, places=2)
-
-    def test_multi_camera_act_dataset_loading(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = create_dummy_dataset(Path(tmpdir), num_episodes=2, num_steps=25)
-            ep_files = find_episode_parquet_files(root)
-            self.assertEqual(len(ep_files), 2)
-
-            cfg = get_profile_config("openamrobot-fixed-mast-19dof")
-            cfg.chunk_size = 100
-            dataset = MultiCameraACTDataset(
-                dataset_path=root,
-                episode_paths=ep_files,
-                config=cfg,
-                load_images=True,
-                normalize_images=True,
-            )
-            self.assertEqual(len(dataset), 50)  # 2 episodes * 25 steps
-
-            sample = dataset[0]
-            self.assertIn("state", sample)
-            self.assertIn("images", sample)
-            self.assertIn("actions", sample)
-            self.assertIn("action_mask", sample)
-
-            self.assertEqual(sample["state"].shape, (19,))
-            self.assertEqual(sample["images"].shape, (4, 3, 224, 224))
-            self.assertEqual(sample["actions"].shape, (100, 19))
-            self.assertEqual(sample["action_mask"].shape, (100,))
-
-    def test_partition_episodes_reproducibility(self):
-        paths = [Path(f"ep_{i}.parquet") for i in range(10)]
-        train1, val1, tr_idx1, val_idx1 = partition_episodes(paths, eval_split=0.2, seed=42)
-        train2, val2, tr_idx2, val_idx2 = partition_episodes(paths, eval_split=0.2, seed=42)
-
-        self.assertEqual(tr_idx1, tr_idx2)
-        self.assertEqual(val_idx1, val_idx2)
-        self.assertEqual(len(val_idx1), 2)
-        self.assertEqual(len(tr_idx1), 8)
-        self.assertEqual(len(set(tr_idx1).intersection(set(val_idx1))), 0)
-
-        # Different seed yields different split
-        _, _, tr_idx3, _ = partition_episodes(paths, eval_split=0.2, seed=999)
-        self.assertNotEqual(tr_idx1, tr_idx3)
-
-    def test_act_policy_forward_training_mode(self):
-        cfg = get_profile_config("openamrobot-fixed-mast-19dof")
-        cfg.chunk_size = 10
-        cfg.d_model = 64
-        cfg.enc_layers = 1
-        cfg.dec_layers = 1
-        cfg.dim_feedforward = 128
-        cfg.n_heads = 4
-
-        policy = ACTPolicy(cfg)
-        policy.train()
-
-        states = torch.randn(2, 19)
-        images = torch.randn(2, 4, 3, 224, 224)
-        actions = torch.randn(2, 10, 19)
-
-        pred_actions, mu, log_var = policy(state=states, images=images, actions=actions)
-        self.assertEqual(pred_actions.shape, (2, 10, 19))
-        self.assertIsNotNone(mu)
-        self.assertIsNotNone(log_var)
-        self.assertEqual(mu.shape, (2, 32))
-        self.assertEqual(log_var.shape, (2, 32))
-
-        loss_dict = policy.compute_loss(pred_actions, actions, mu, log_var)
-        self.assertIn("loss", loss_dict)
-        self.assertIn("l1_loss", loss_dict)
-        self.assertIn("kl_loss", loss_dict)
-        self.assertTrue(loss_dict["loss"].item() > 0)
-
-    def test_act_policy_forward_eval_mode(self):
-        cfg = get_profile_config("openamrobot-fixed-mast-19dof")
-        cfg.chunk_size = 10
-        cfg.d_model = 64
-        cfg.enc_layers = 1
-        cfg.dec_layers = 1
-        cfg.dim_feedforward = 128
-        cfg.n_heads = 4
-
-        policy = ACTPolicy(cfg)
-        policy.eval()
-
-        states = torch.randn(2, 19)
-        images = torch.randn(2, 4, 3, 224, 224)
-
-        with torch.no_grad():
-            pred_actions, mu, log_var = policy(state=states, images=images)
-
-        self.assertEqual(pred_actions.shape, (2, 10, 19))
-        self.assertIsNone(mu)
-        self.assertIsNone(log_var)
-
-    def test_training_smoke_test_run(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            dataset_dir = create_dummy_dataset(root / "dataset", num_episodes=2, num_steps=10)
-            qa_report_path = root / "qa_report.json"
-            qa_report_path.write_text(
-                json.dumps(
-                    {
-                        "report_version": 1,
-                        "status": "PASS",
-                        "quality_status": "PASS",
-                        "exit_code": 0,
-                        "training_ready": True,
-                        "source_profile": "SYNTHETIC",
-                        "findings": [{"check_id": "C10_SCHEMA", "status": "PASS", "severity": "INFO"}],
-                        "episodes": [{"episode_index": 0, "status": "PASS", "data_origin": "synthetic"}],
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            cfg = get_profile_config("openamrobot-fixed-mast-19dof")
-            cfg.chunk_size = 10
-            cfg.d_model = 64
-            cfg.enc_layers = 1
-            cfg.dec_layers = 1
-            cfg.dim_feedforward = 128
-            cfg.n_heads = 4
-            cfg.epochs = 2
-            cfg.device = "cpu"
-
-            out_dir = root / "output"
-            summary = train_act(
-                dataset_path=dataset_dir,
-                config=cfg,
-                qa_report_path=qa_report_path,
-                output_dir=out_dir,
-                smoke_test=True,
+    root, policy, manifest = synthetic_inputs
+    if fault == "native_data":
+        next((root / "data").rglob("*.parquet")).unlink()
+    elif fault == "camera":
+        next((root / "videos").rglob("*.mp4")).unlink()
+    elif fault == "policy":
+        data = json.loads(policy.read_text())
+        data["approved"] = False
+        policy.write_text(json.dumps(data))
+    elif fault == "forged_robot":
+        for path in (root / "meta/openamrobot/episodes").glob("*.json"):
+            data = json.loads(path.read_text())
+            data["openamrobot"]["provenance"]["data_origin"] = "actual"
+            data["openamrobot"]["provenance"]["source_profile"] = "ROBOT"
+            path.write_text(json.dumps(data))
+    rebind(synthetic_inputs)
+    dependency = (
+        patch(
+            "oa_embodied_ai.dataset_qa.episode.parquet",
+            side_effect=ImportError("native unavailable"),
+        )
+        if fault == "native_dependencies"
+        else nullcontext()
+    )
+    with dependency, patch("oa_embodied_ai.training.cli.ACTPolicy") as model:
+        with pytest.raises(TrainingBlockedError) as error:
+            train_act(
+                root,
+                tiny_config,
+                output_dir=tmp_path / "run",
                 allow_synthetic_eval=True,
+                input_manifest_path=manifest,
+                policy_path=policy,
             )
-
-            self.assertEqual(summary["status"], "COMPLETED")
-            self.assertEqual(summary["acceptance_status"], "NOT_VERIFIED_PHYSICAL")
-            self.assertTrue((out_dir / "act_policy_best.pt").is_file())
-            self.assertTrue((out_dir / "act_policy_best.pt.sha256").is_file())
-            self.assertTrue((out_dir / "c11_training_summary.json").is_file())
+        assert error.value.exit_code == 2
+        model.assert_not_called()
+    assert not (tmp_path / "run/c11_training_summary.json").exists()
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_bounded_cpu_training_and_honest_checkpoint(
+    synthetic_inputs, tiny_config, tmp_path
+):
+    root, policy, manifest = synthetic_inputs
+    summary = train_act(
+        root,
+        tiny_config,
+        output_dir=tmp_path / "run",
+        smoke_test=True,
+        allow_synthetic_eval=True,
+        input_manifest_path=manifest,
+        policy_path=policy,
+    )
+    assert summary["status"] == "COMPLETED" and summary["is_synthetic_override"]
+    assert summary["acceptance_status"] == "NOT_VERIFIED_PHYSICAL"
+    assert summary["production_acceptance"] == "NOT_VERIFIED"
+    assert summary["gate_status"] == "NOT_VERIFIED"
+    assert not set(summary["train_episodes"]) & set(summary["val_episodes"])
+    assert summary["checkpoint_sha256"] == file_sha256(summary["checkpoint_path"])
+    assert summary["provenance"]["dependencies"]["lerobot"] is None
+    markdown = (tmp_path / "run/c11_training_summary.md").read_text()
+    assert (
+        "NOT_VERIFIED_PHYSICAL" in markdown
+        and '"acceptance_status": "VERIFIED_PHYSICAL"' not in markdown
+    )
+
+
+def test_every_selected_episode_requires_diagnostics(
+    synthetic_inputs, tiny_config, tmp_path
+):
+    from oa_embodied_ai.dataset_qa import episode as c10
+
+    root, policy, manifest = synthetic_inputs
+    report = c10.check_dataset(root, policy, [0, 1])
+    report["findings"] = [
+        f
+        for f in report["findings"]
+        if not (f["episode"] == 1 and f["check_id"] == "C10_VIDEO")
+    ]
+    with (
+        patch.object(c10, "check_dataset", return_value=report),
+        patch("oa_embodied_ai.training.cli.ACTPolicy") as model,
+    ):
+        with pytest.raises(TrainingBlockedError):
+            train_act(
+                root,
+                tiny_config,
+                output_dir=tmp_path / "run",
+                allow_synthetic_eval=True,
+                input_manifest_path=manifest,
+                policy_path=policy,
+            )
+        model.assert_not_called()
+
+
+def test_registry_pass_cannot_override_native_qa(
+    synthetic_inputs, tiny_config, rebind, tmp_path
+):
+    root, policy, manifest = synthetic_inputs
+    (root / "registry.json").write_text('{"quality_status":"passed"}')
+    (root / "data/chunk-000/file-000.parquet").write_bytes(b"corrupt native artifact")
+    rebind(synthetic_inputs)
+    with patch("oa_embodied_ai.training.cli.ACTPolicy") as model:
+        with pytest.raises(TrainingBlockedError):
+            train_act(
+                root,
+                tiny_config,
+                output_dir=tmp_path / "run",
+                allow_synthetic_eval=True,
+                input_manifest_path=manifest,
+                policy_path=policy,
+            )
+        model.assert_not_called()

@@ -1,239 +1,215 @@
 # SPDX-License-Identifier: MIT
-"""Fail-closed C10 pre-flight training gate consumer.
+"""Fresh native C10 QA followed by the canonical fail-closed decision API."""
 
-Deliverable C11: ACT Imitation Learning Baseline.
-Resolves C10->C11 handoff findings:
-1. Gating Rule (Fail-Closed): Training must fail closed on unverified,
-   synthetic, or contradictory C10 reports.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-import json
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+
+from ..dataset_qa import episode as c10
+from ..dataset_qa import training_readiness
+from ..dataset_qa.contract import C9_SCHEMA_SHA256
+from ..dataset_qa.handoff import REQUIRED_CHECKS
+from ..dataset_qa.strict_io import load_data
+from .config import get_profile_config
+from .inputs import assert_unchanged, file_sha256, json_sha256, load_input_manifest
 
 LOG = logging.getLogger("oa-c11-gate")
 
 
 class TrainingBlockedError(Exception):
-    """Raised when the pre-flight quality verification gate fails."""
+    """No training authorization; CLI exit code 2."""
 
     def __init__(
         self,
-        message: str = "Training gate is CLOSED: dataset failed quality verification.",
-        exit_code: int = 2,
-    ) -> None:
+        message="Training gate is CLOSED: dataset failed quality verification.",
+        exit_code=2,
+    ):
         super().__init__(message)
         self.message = message
-        self.exit_code = exit_code
-        self.code = exit_code
+        self.exit_code = self.code = exit_code
 
 
 @dataclass
 class GateStatus:
-    """Status record returned when dataset passes the pre-flight gate."""
-
     training_ready: bool
     quality_status: str
     source_profile: str
-    qa_report: Dict[str, Any]
-    reasons: List[str] = field(default_factory=list)
+    qa_report: dict
+    reasons: list = field(default_factory=list)
     is_synthetic_override: bool = False
+    input_manifest: dict = field(default_factory=dict)
+    decision: dict = field(default_factory=dict)
+    report_sha256: str = ""
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key):
         return getattr(self, key)
 
 
-def verify_training_gate(
-    dataset_path: Path,
-    qa_report_path: Optional[Path] = None,
-    allow_synthetic_override: bool = False,
-) -> GateStatus:
-    """Verify that the dataset satisfies all C10 quality criteria before training.
+def _synthetic_testing_ready(report, manifest):
+    """Permit ONLY the real-episode exception; never manufacture a C10 PASS.
 
-    Fail-Closed Invariants:
-      a) training_ready MUST be explicitly True. If false or missing, raise
-         TrainingBlockedError and exit code 2.
-      b) quality_status MUST NOT be BLOCKED, REJECT, or NOT_VERIFIED.
-      c) If source_profile != "ROBOT", it MUST fail closed unless
-         allow_synthetic_override is explicitly True, in which case it logs:
-         "WARNING: Synthetic data override active. Artifacts will be stamped NOT_VERIFIED_PHYSICAL."
-      d) Contradictory check: If the report contains ANY finding with
-         severity == "REJECT" (or status == "REJECT"), training is blocked
-         regardless of top-level boolean fields.
-
-    Args:
-        dataset_path: Directory path to LeRobotDataset.
-        qa_report_path: Optional direct path to QA report JSON.
-        allow_synthetic_override: If True, permits synthetic data for CI/dry-runs.
-
-    Returns:
-        GateStatus containing gate verification metadata.
-
-    Raises:
-        TrainingBlockedError: If any gate invariant fails.
+    This is software-test execution permission, separate from canonical training
+    readiness. Every other diagnostic must be present and PASS.
     """
-    dataset_path = Path(dataset_path)
-    report_dict: Optional[Dict[str, Any]] = None
-
-    # 1. Resolve and load QA report
-    if qa_report_path is not None:
-        qa_path = Path(qa_report_path)
-        if not qa_path.is_file():
-            LOG.error("QA report file not found at %s", qa_path)
-            raise TrainingBlockedError(
-                "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
+    findings, episodes = report.get("findings"), report.get("episodes")
+    if (
+        report.get("report_version") != 1
+        or type(report.get("report_version")) is not int
+        or report.get("status") != "NOT_VERIFIED"
+        or type(report.get("exit_code")) is not int
+        or report["exit_code"] != 2
+        or report.get("training_ready") is not False
+        or report.get("production_acceptance") != "NOT_VERIFIED"
+        or not isinstance(findings, list)
+        or not findings
+        or not isinstance(episodes, list)
+        or not episodes
+    ):
+        return False
+    provenance = report.get("provenance", {})
+    policy = provenance.get("policy", {})
+    if (
+        provenance.get("c9_contract", {}).get("sha256") != C9_SCHEMA_SHA256
+        or policy.get("approved") is not True
+        or not all(
+            isinstance(policy.get(k), str) and policy[k].strip()
+            for k in ("id", "evidence", "sha256")
+        )
+    ):
+        return False
+    for finding in findings:
+        if (
+            not isinstance(finding, dict)
+            or not isinstance(finding.get("check_id"), str)
+            or (
+                finding.get("episode") is not None
+                and type(finding["episode"]) is not int
             )
-        try:
-            report_dict = json.loads(qa_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            LOG.error("Failed to parse QA report JSON at %s: %s", qa_path, exc)
-            raise TrainingBlockedError(
-                "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
-            ) from exc
-    else:
-        # Check standard report locations
-        candidate_paths = [
-            dataset_path / "reports" / "qa_report.json",
-            dataset_path / "qa_report.json",
-            Path("reports") / "qa_report.json",
+        ):
+            return False
+        if finding["check_id"] == "C10_REAL_EPISODE":
+            if (
+                finding.get("status") != "NOT_VERIFIED"
+                or finding.get("observed") != "synthetic"
+            ):
+                return False
+        elif finding.get("status") != "PASS":
+            return False
+    actual = [e.get("episode_index") if isinstance(e, dict) else None for e in episodes]
+    if any(type(i) is not int for i in actual) or sorted(actual) != sorted(
+        manifest["episode_indices"]
+    ):
+        return False
+    for episode in episodes:
+        binding = episode.get("binding", {})
+        if (
+            episode.get("status") != "NOT_VERIFIED"
+            or episode.get("data_origin") != "synthetic"
+            or binding.get("dataset_id") != manifest["dataset_id"]
+            or binding.get("dataset_revision") != manifest["dataset_revision"]
+            or binding.get("episode_index") != episode["episode_index"]
+        ):
+            return False
+        applicable = [
+            f for f in findings if f.get("episode") in (None, episode["episode_index"])
         ]
-        for candidate in candidate_paths:
-            if candidate.is_file():
-                try:
-                    report_dict = json.loads(candidate.read_text(encoding="utf-8"))
-                    LOG.info("Loaded pre-flight QA report from %s", candidate)
-                    break
-                except Exception as exc:
-                    LOG.warning("Candidate report at %s failed to parse: %s", candidate, exc)
+        if REQUIRED_CHECKS - {f["check_id"] for f in applicable}:
+            return False
+        if not any(
+            f["check_id"] == "C10_REAL_EPISODE"
+            and f.get("episode") == episode["episode_index"]
+            for f in applicable
+        ):
+            return False
+    return True
 
-        # If still not found, execute programmatic check_dataset
-        if report_dict is None:
-            try:
-                from oa_embodied_ai.dataset_qa.episode import check_dataset
 
-                LOG.info("Running programmatic dataset QA check on %s", dataset_path)
-                report_dict = check_dataset(dataset_path)
-            except Exception as exc:
-                LOG.error("Programmatic check_dataset execution failed: %s", exc)
-                raise TrainingBlockedError(
-                    "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
-                ) from exc
+def verify_training_gate(
+    dataset_path,
+    qa_report_path=None,
+    allow_synthetic_override=False,
+    *,
+    input_manifest_path=None,
+    policy_path=None,
+):
+    """Rerun C10 on the independently bound snapshot and exact selection.
 
-    if not isinstance(report_dict, dict):
-        LOG.error("Invalid QA report: expected dictionary, got %s", type(report_dict))
-        raise TrainingBlockedError(
-            "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
+    An optional old report is only a strict comparison artifact, never a gate
+    substitute. No automatic discovery in the dataset or working directory.
+    """
+    try:
+        if input_manifest_path is None or policy_path is None:
+            raise ValueError("Explicit input manifest and reviewed policy are required")
+        root = Path(dataset_path).resolve(strict=True)
+        manifest = load_input_manifest(input_manifest_path)
+        get_profile_config(manifest["profile"]).validate()
+        assert_unchanged(root, manifest, policy_path)
+        report = c10.check_dataset(root, Path(policy_path), manifest["episode_indices"])
+        assert_unchanged(root, manifest, policy_path)
+        decision = training_readiness(
+            report,
+            dataset_id=manifest["dataset_id"],
+            dataset_revision=manifest["dataset_revision"],
+            episode_indices=manifest["episode_indices"],
         )
-
-    # 2. Check exit code if present
-    exit_code = report_dict.get("exit_code")
-    if exit_code is not None and (exit_code != 0 or type(exit_code) is not int):
-        LOG.error("QA report reports nonzero exit_code: %s", exit_code)
-        raise TrainingBlockedError(
-            "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
-        )
-
-    # 3. Invariant (a): training_ready MUST be explicitly True
-    if report_dict.get("training_ready") is not True:
-        LOG.error("training_ready is not True (value=%s)", report_dict.get("training_ready"))
-        raise TrainingBlockedError(
-            "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
-        )
-
-    # 4. Invariant (b): quality_status MUST NOT be BLOCKED, REJECT, or NOT_VERIFIED
-    blocked_statuses = {"BLOCKED", "REJECT", "NOT_VERIFIED"}
-    quality_status = (
-        report_dict.get("quality_status")
-        or report_dict.get("status")
-        or "NOT_VERIFIED"
-    )
-    if not isinstance(quality_status, str):
-        LOG.error("Invalid quality_status type: %s", type(quality_status))
-        raise TrainingBlockedError(
-            "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
-        )
-
-    normalized_status = quality_status.upper()
-    if normalized_status in blocked_statuses:
-        LOG.error("QA report indicates blocked status: %s", quality_status)
-        raise TrainingBlockedError(
-            "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
-        )
-
-    if normalized_status not in {"PASS", "PASSED"}:
-        LOG.error("QA report quality_status '%s' is not PASS/PASSED", quality_status)
-        raise TrainingBlockedError(
-            "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
-        )
-
-    # 5. Invariant (d): Contradictory check: If ANY finding has severity == "REJECT" or status == "REJECT"
-    findings = report_dict.get("findings")
-    if isinstance(findings, list):
-        for finding in findings:
-            if not isinstance(finding, dict):
-                continue
-            f_sev = str(finding.get("severity", "")).upper()
-            f_stat = str(finding.get("status", "")).upper()
-            if f_sev in {"REJECT", "BLOCKED", "NOT_VERIFIED"} or f_stat in {"REJECT", "BLOCKED", "NOT_VERIFIED"}:
-                LOG.error(
-                    "Contradictory finding detected: check_id=%s, severity=%s, status=%s",
-                    finding.get("check_id"),
-                    finding.get("severity"),
-                    finding.get("status"),
+        provenance = report["provenance"]
+        if provenance["policy"]["sha256"] != manifest["policy_sha256"]:
+            raise ValueError("C10 policy provenance mismatch")
+        expected_checker = {
+            name: file_sha256(Path(c10.__file__).parent / name)
+            for name in (
+                "episode.py",
+                "semantics.py",
+                "strict_io.py",
+                "contract.py",
+                "handoff.py",
+            )
+        }
+        if provenance.get("checker_files_sha256") != expected_checker:
+            raise ValueError("C10 checker provenance mismatch")
+        for episode in report["episodes"]:
+            sidecar = episode["sidecar"]
+            if sidecar["sha256"] != manifest["files_sha256"].get(sidecar["path"]):
+                raise ValueError("C10 sidecar provenance mismatch")
+            if episode["data_origin"] != manifest["data_origin"]:
+                raise ValueError("C10 origin contradicts trusted input origin")
+        if report.get("quality_status", report["status"]) != report["status"]:
+            raise ValueError("Contradictory report status")
+        if any(
+            f.get("severity") in ("REJECT", "BLOCKED", "NOT_VERIFIED")
+            and f.get("status") == "PASS"
+            for f in report["findings"]
+        ):
+            raise ValueError("Contradictory finding severity")
+        if qa_report_path is not None and load_data(Path(qa_report_path)) != report:
+            raise ValueError("Supplied QA report differs from fresh native QA")
+        synthetic = manifest["data_origin"] == "synthetic"
+        if synthetic and report.get("source_profile") == "ROBOT":
+            raise ValueError("ROBOT label contradicts synthetic origin")
+        if synthetic:
+            if not allow_synthetic_override or not _synthetic_testing_ready(
+                report, manifest
+            ):
+                raise ValueError(
+                    "Synthetic testing requires complete QA except real-episode evidence"
                 )
-                raise TrainingBlockedError(
-                    "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
-                )
-
-    # 6. Invariant (c): source_profile check
-    source_profile = (
-        report_dict.get("source_profile")
-        or report_dict.get("provenance", {}).get("source_profile")
-        or report_dict.get("meta", {}).get("source_profile")
-    )
-    if source_profile is None:
-        # Check episode-level data origin
-        episodes = report_dict.get("episodes")
-        if isinstance(episodes, list) and episodes:
-            all_actual = all(
-                isinstance(e, dict) and e.get("data_origin") == "actual" for e in episodes
+            LOG.warning(
+                "Synthetic software test only; canonical C10 remains NOT_VERIFIED"
             )
-            any_synthetic = any(
-                isinstance(e, dict) and e.get("data_origin") == "synthetic" for e in episodes
-            )
-            if any_synthetic:
-                source_profile = "SYNTHETIC"
-            elif all_actual:
-                source_profile = "ROBOT"
-            else:
-                source_profile = "UNKNOWN"
-        else:
-            source_profile = "UNKNOWN"
-
-    source_profile_norm = str(source_profile).upper()
-    is_synthetic_override = False
-
-    if source_profile_norm != "ROBOT":
-        if not allow_synthetic_override:
-            LOG.error(
-                "Source profile '%s' is not ROBOT and allow_synthetic_override is False.",
-                source_profile,
-            )
-            raise TrainingBlockedError(
-                "Training gate is CLOSED: dataset failed quality verification.", exit_code=2
-            )
-        LOG.warning("WARNING: Synthetic data override active. Artifacts will be stamped NOT_VERIFIED_PHYSICAL.")
-        is_synthetic_override = True
-
-    return GateStatus(
-        training_ready=True,
-        quality_status=quality_status,
-        source_profile=str(source_profile),
-        qa_report=report_dict,
-        is_synthetic_override=is_synthetic_override,
-    )
-
+        elif not decision["training_ready"]:
+            raise ValueError("; ".join(decision["reasons"]))
+        return GateStatus(
+            training_ready=decision["training_ready"],
+            quality_status=decision["status"],
+            source_profile="SYNTHETIC" if synthetic else "ROBOT",
+            qa_report=report,
+            reasons=decision["reasons"],
+            is_synthetic_override=synthetic,
+            input_manifest=manifest,
+            decision=decision,
+            report_sha256=json_sha256(report),
+        )
+    except TrainingBlockedError:
+        raise
+    except Exception as error:
+        raise TrainingBlockedError(f"Training gate is CLOSED: {error}") from error

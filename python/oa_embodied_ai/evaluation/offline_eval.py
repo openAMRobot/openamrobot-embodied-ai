@@ -13,12 +13,11 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-import torch
 import numpy as np
-import pyarrow.parquet as pq
+import torch
 
 from ..training.config import ACTConfig
-from ..training.dataset import MultiCameraACTDataset, find_episode_parquet_files
+from ..training.dataset import MultiCameraACTDataset
 
 LOG = logging.getLogger("oa-c11-offline-eval")
 
@@ -38,7 +37,14 @@ def temporal_ensemble_predict(
     Overlapping chunk predictions are accumulated with exp(-lambda * k) weights.
     """
     T = len(state_sequence)
-    action_dim = getattr(model, "action_dim", 19)
+    if (
+        T == 0
+        or chunk_size < 1
+        or not np.isfinite(ensemble_lambda)
+        or ensemble_lambda < 0
+    ):
+        raise ValueError("Invalid temporal ensemble inputs")
+    action_dim = model.action_dim
     accum = np.zeros((T + chunk_size, action_dim), dtype=np.float64)
     weight_sum = np.zeros(T + chunk_size, dtype=np.float64)
 
@@ -46,8 +52,17 @@ def temporal_ensemble_predict(
     with torch.no_grad():
         for t in range(T):
             s_t = torch.from_numpy(state_sequence[t : t + 1]).float().to(device)
-            img_t = images_sequence[t : t + 1].to(device) if images_sequence is not None else None
+            img_t = (
+                images_sequence[t : t + 1].to(device)
+                if images_sequence is not None
+                else None
+            )
             pred_chunk, _, _ = model(state=s_t, images=img_t)
+            if (
+                pred_chunk.shape != (1, chunk_size, action_dim)
+                or not torch.isfinite(pred_chunk).all()
+            ):
+                raise ValueError("Invalid predicted action chunk")
             pred_np = pred_chunk[0].cpu().numpy()
             for k in range(chunk_size):
                 w = np.exp(-ensemble_lambda * k)
@@ -68,20 +83,34 @@ def compute_chunk_discontinuity(
     """Compute chunk boundary discontinuity error between chunk k step K-1 and chunk k+1 step 0."""
     T = len(state_sequence)
     if T < chunk_size * 2:
-        return 0.0
+        return None
 
     model.eval()
     discontinuities: List[float] = []
 
     with torch.no_grad():
         for start_t in range(0, T - chunk_size * 2 + 1, chunk_size):
-            s_k = torch.from_numpy(state_sequence[start_t : start_t + 1]).float().to(device)
-            img_k = images_sequence[start_t : start_t + 1].to(device) if images_sequence is not None else None
+            s_k = (
+                torch.from_numpy(state_sequence[start_t : start_t + 1])
+                .float()
+                .to(device)
+            )
+            img_k = (
+                images_sequence[start_t : start_t + 1].to(device)
+                if images_sequence is not None
+                else None
+            )
             chunk_k, _, _ = model(state=s_k, images=img_k)
 
             next_t = start_t + chunk_size
-            s_k1 = torch.from_numpy(state_sequence[next_t : next_t + 1]).float().to(device)
-            img_k1 = images_sequence[next_t : next_t + 1].to(device) if images_sequence is not None else None
+            s_k1 = (
+                torch.from_numpy(state_sequence[next_t : next_t + 1]).float().to(device)
+            )
+            img_k1 = (
+                images_sequence[next_t : next_t + 1].to(device)
+                if images_sequence is not None
+                else None
+            )
             chunk_k1, _, _ = model(state=s_k1, images=img_k1)
 
             # Delta between last step of chunk k (index chunk_size - 1) and first step of chunk k+1 (index 0)
@@ -90,7 +119,7 @@ def compute_chunk_discontinuity(
             delta = float(np.mean(np.abs(last_k - first_k1)))
             discontinuities.append(delta)
 
-    return float(np.mean(discontinuities)) if discontinuities else 0.0
+    return float(np.mean(discontinuities)) if discontinuities else None
 
 
 def compute_offline_metrics(
@@ -110,19 +139,33 @@ def compute_offline_metrics(
     Returns:
         Dictionary containing overall_mae, overall_mse, per_channel dict, and chunk discontinuity.
     """
+    if (
+        gt_actions.ndim != 2
+        or gt_actions.shape != pred_actions.shape
+        or not len(gt_actions)
+        or not np.isfinite(gt_actions).all()
+        or not np.isfinite(pred_actions).all()
+    ):
+        raise ValueError(
+            "Offline metrics require finite matching nonempty action matrices"
+        )
     error = pred_actions - gt_actions
     overall_mae = float(np.mean(np.abs(error)))
-    overall_mse = float(np.mean(error ** 2))
+    overall_mse = float(np.mean(error**2))
 
     num_channels = gt_actions.shape[-1]
     per_channel: Dict[str, Dict[str, float]] = {}
 
     for ch in range(num_channels):
-        ch_name = channel_names[ch] if channel_names and ch < len(channel_names) else f"channel_{ch}"
+        ch_name = (
+            channel_names[ch]
+            if channel_names and ch < len(channel_names)
+            else f"channel_{ch}"
+        )
         ch_err = error[:, ch]
         per_channel[ch_name] = {
             "mae": float(np.mean(np.abs(ch_err))),
-            "mse": float(np.mean(ch_err ** 2)),
+            "mse": float(np.mean(ch_err**2)),
         }
 
     return {
@@ -146,40 +189,50 @@ def run_offline_eval(
     all_pred: List[np.ndarray] = []
     discontinuity_accum: List[float] = []
 
-    for ep_path in episode_paths:
-        table = pq.read_table(ep_path)
-        state_raw = np.array(table.column("observation.state").to_pylist(), dtype=np.float32)
-        act_raw = np.array(table.column("action").to_pylist(), dtype=np.float32)
+    for episode in episode_paths:
+        dataset = MultiCameraACTDataset(dataset_path, [episode], config)
+        state_raw = np.stack([sample["state"] for sample in dataset.samples])
+        act_raw = dataset.samples[0]["act_raw"]
 
-        if len(state_raw) == 0:
-            continue
+        # Decode only the requested frames, keeping image memory bounded.
+        class EpisodeImages:
+            def __getitem__(self, selection, dataset=dataset):
+                return torch.stack(
+                    [
+                        dataset[i]["images"]
+                        for i in range(*selection.indices(len(dataset)))
+                    ]
+                )
 
-        # Run temporal ensembling
+        images = EpisodeImages()
         pred_ensembled = temporal_ensemble_predict(
             model=model,
             state_sequence=state_raw,
+            images_sequence=images,
             chunk_size=config.chunk_size,
             device=device,
             ensemble_lambda=ensemble_lambda,
         )
-
         disc = compute_chunk_discontinuity(
             model=model,
             state_sequence=state_raw,
+            images_sequence=images,
             chunk_size=config.chunk_size,
             device=device,
         )
-        discontinuity_accum.append(disc)
-
+        if disc is not None:
+            discontinuity_accum.append(disc)
         all_gt.append(act_raw)
         all_pred.append(pred_ensembled)
 
     if not all_gt:
-        raise ValueError(f"No valid episodes found for offline evaluation under {dataset_path}")
+        raise ValueError(
+            f"No valid episodes found for offline evaluation under {dataset_path}"
+        )
 
     combined_gt = np.concatenate(all_gt, axis=0)
     combined_pred = np.concatenate(all_pred, axis=0)
-    mean_disc = float(np.mean(discontinuity_accum)) if discontinuity_accum else 0.0
+    mean_disc = float(np.mean(discontinuity_accum)) if discontinuity_accum else None
 
     return compute_offline_metrics(
         gt_actions=combined_gt,

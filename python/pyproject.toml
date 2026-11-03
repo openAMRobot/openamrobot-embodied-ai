@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "oa_embodied_ai"
 version = "0.0.0"
-description = "OpenAMRobot embodied AI tooling: dataset QA (C10); conversion, training and evaluation are planned"
+description = "OpenAMRobot embodied AI tooling: dataset QA (C10) and experimental custom visual imitation tooling (C11)"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Botshare LTD", email = "info@botshare.ai" }]
@@ -21,9 +21,9 @@ native = ["pyarrow>=17,<27"]
 training = [
     "torch>=2.2.0",
     "torchvision>=0.17.0",
-    "lerobot>=0.4.1",
-    "scipy>=1.10.0",
-    "statsmodels>=0.14.0",
+    "numpy",
+    "pyarrow>=17,<27",
+    "opencv-python-headless",
 ]
 
 [project.scripts]
