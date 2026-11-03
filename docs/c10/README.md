@@ -245,3 +245,15 @@ checker source hashes). Episode entries include native dataset/revision/episode
 sidecar `source`. Output has sorted JSON keys, no wall-clock fields and stable
 ordered findings. `training_ready` is true only for a complete PASS; synthetic
 fixtures retain NOT_VERIFIED even with their explicit synthetic test policy.
+
+
+### Multi-episode recording evidence
+
+For a selected training/validation set, a reviewed policy may supply
+`real_episodes`, a mapping from canonical decimal episode-index strings to the
+same evidence objects previously supplied in `real_episode` (exact dataset ID,
+revision, episode ID/index and nonempty evidence). Every selected episode must
+have its own matching entry; no missing entry falls back to another episode.
+The existing `real_episode` single-episode form is retained. Supplying both
+forms is rejected as ambiguous. This is a local checker-policy extension, not
+an approval, C9 schema change or relaxation of actual-origin requirements.

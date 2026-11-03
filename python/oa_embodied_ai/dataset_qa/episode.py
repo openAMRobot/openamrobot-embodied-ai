@@ -272,7 +272,10 @@ def evidence(root, sidecar, policy, emit):
                  and all(s["version"] == actual["release"] and s["commit"] == actual["commit"] for s in recording))
         emit("C10_RELEASE", "PASS" if valid else "REJECT", observed={"pin":actual,"software":recording}, expected=release,
              fix="Reconcile recording software provenance with the approved release pin.")
-    real = policy.get("real_episode", {}) if approved else {}
+    # Preserve the original single-episode policy; multi-episode training uses
+    # explicit per-index evidence with no fallback for an uncovered selection.
+    real = (policy["real_episodes"].get(str(sidecar["native_lerobot"]["episode_index"]), {})
+            if "real_episodes" in policy else policy.get("real_episode", {})) if approved else {}
     real_verified = (am["provenance"]["data_origin"] == "actual" and bool(real.get("evidence"))
                      and all(real.get(key) == sidecar["native_lerobot"][key]
                              for key in ("dataset_id","dataset_revision","episode_id","episode_index")))
@@ -317,9 +320,18 @@ def check_dataset(dataset_path, policy_path=None, episode_indices=None, *, c9_sc
         if policy.get("approved") is True and any(not isinstance(policy.get(key),str) or not policy[key].strip() for key in ("id","evidence")):
             raise ValueError("approved policy requires nonempty string id and evidence")
         for key in ("profiles","action_bounds","synchronization","stream_quality","action_latency",
-                    "calibration","release","real_episode","native_identity","source_profile","video_content"):
+                    "calibration","release","real_episode","real_episodes","native_identity","source_profile","video_content"):
             if key in policy and not isinstance(policy[key],dict):
                 raise ValueError(f"policy {key} must be an object")
+        if "real_episode" in policy and "real_episodes" in policy:
+            raise ValueError("Use either real_episode or real_episodes; ambiguous approval evidence is rejected")
+        for index, binding in policy.get("real_episodes", {}).items():
+            if (not isinstance(index, str) or not index.isdecimal() or str(int(index)) != index
+                    or not isinstance(binding, dict) or type(binding.get("episode_index")) is not int
+                    or binding["episode_index"] != int(index)
+                    or not all(isinstance(binding.get(key), str) and binding[key].strip()
+                               for key in ("dataset_id", "dataset_revision", "episode_id", "evidence"))):
+                raise ValueError("real_episodes requires canonical decimal indices and matching episode bindings")
         for key in ("profiles","action_bounds","stream_quality","calibration","video_content"):
             if any(not isinstance(value,dict) for value in policy.get(key,{}).values()):
                 raise ValueError(f"policy {key} entries must be objects")
