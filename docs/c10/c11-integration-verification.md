@@ -91,7 +91,10 @@ C10 suites verify it. No ROS/safety-controller code is changed.
 
 The new `C10 C11 CPU integration` workflow installs declared extras and CPU
 Torch, checks the pinned C9 assets, runs all Python regressions and retains honest
-synthetic software evidence. Existing C10 checks remain intact. No hosted result
+synthetic software evidence. The existing `quality/python` job is also updated to install the declared
+native/training extras and ffmpeg: its first hosted execution otherwise failed
+test collection without Torch/PyArrow. Tests are not replaced by skips. Existing
+C10 checks and the ROS job remain intact. No hosted result
 is inferred from local results. No GPU training, external dataset download,
 simulator/hardware motion or production deployment was attempted.
 
