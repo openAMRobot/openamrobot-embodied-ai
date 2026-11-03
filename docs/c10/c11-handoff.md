@@ -59,3 +59,12 @@ approval remain owner responsibilities; no new release policy is introduced.
 
 Integration collaborator: the C11 owner. Software-lead review is required for the
 handoff and accepted profiles; C10 does not change or replace C11/C14 code.
+
+## Current PR #4 integration review (2 November 2026)
+
+The independent review of PR #4 at `db199924543d888259fdf87c829481968e2112f3`
+and corrections on a separate integration branch are recorded in
+[c11-integration-audit.md](c11-integration-audit.md). The historical baseline
+findings above remain exact-SHA historical evidence. See the
+[versioned profile mapping](robot-profile-compatibility-v1.md) before choosing
+recording inputs; no actual recording or production acceptance is established.
