@@ -7,7 +7,7 @@ Embodied AI for OpenAMRobot: episode capture, dataset QA, imitation-learning bas
 This repository holds the embodied AI work for OpenAMRobot:
 
 - Episode capture: a ROS 2 recorder. It is a skeleton today and records nothing until the C9 capture topic contract is approved.
-- Dataset QA (C10): validation of dataset release entries in `datasets/registry.yaml`.
+- Dataset QA (C10): release registry validation and read-only C9/native episode quality checks. The migration is draft; real-episode acceptance remains unverified.
 - Imitation-learning baseline ACT (C11): planned.
 - Evaluation (C14): offline and simulation evaluation, planned.
 - Policy runtime: a ROS 2 lifecycle node that runs a policy and publishes base commands. It is a skeleton today.
@@ -33,7 +33,7 @@ Code owners are the lead and Mohamed, so a pull request by the lead can still be
 | --- | --- |
 | `ros2/openamrobot_ai_recorder` | Recorder skeleton (ament_python). Validates its configuration, logs the interfaces commit and C9 schema reference, writes no data. |
 | `ros2/openamrobot_policy_runner` | Policy runner lifecycle node skeleton (ament_python). |
-| `python/oa_embodied_ai/dataset_qa` | C10 dataset QA and the `oa-dataset-qa` command. |
+| `python/oa_embodied_ai/dataset_qa` | Registry `oa-dataset-qa`, episode `oa-c10-check`, and the fail-closed C11 report consumer. |
 | `python/oa_embodied_ai/conversion` | README only: capture to LeRobotDataset export, planned. |
 | `python/oa_embodied_ai/training` | README only: C11 ACT baseline, planned. |
 | `python/oa_embodied_ai/evaluation` | README only: C14 evaluation, planned. |
@@ -109,11 +109,19 @@ python3 -m pytest tests
 
 Python tooling:
 
+Check out the pinned external C9 assets first using the [C10 guide](docs/c10/README.md).
+
 ```bash
-pip install -e "python[test]"
-pytest python/tests
+python -m pip install -e "python[test]"
+python -m pytest python/tests -v
 oa-dataset-qa datasets/registry.yaml
 ```
+
+For episode/native QA install `python[test,native]` and ffmpeg/ffprobe. See the
+[C10 guide](docs/c10/README.md), [audit](docs/c10/integration-audit.md),
+[C11 handoff](docs/c10/c11-handoff.md), and [acceptance checklist](docs/c10/acceptance-checklist.md).
+A valid registry entry does not establish training readiness. Synthetic tests and
+reports do not establish actual recording or production acceptance.
 
 ## Contributing
 
