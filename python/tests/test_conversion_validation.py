@@ -259,3 +259,25 @@ def test_phase_check_observes_original_measured_lift_motion():
     ]
     with pytest.raises(ConversionError, match="reviewed stowed-pose"):
         validate_recording_phases({"state": samples}, p)
+
+
+def test_registered_capture_semantics_are_immutable():
+    from unittest.mock import patch
+
+    from oa_embodied_ai.recording.profile import capture_contract_digest
+
+    p, _ = profile_fixture()
+    p.update(
+        origin="robot", status="accepted", approval_ref="unit-test-only-not-an-approval"
+    )
+    registry = {
+        p["profile_id"]: {
+            "sha256": capture_contract_digest(p),
+            "approval_ref": p["approval_ref"],
+        }
+    }
+    with patch("oa_embodied_ai.recording.profile.APPROVED_CAPTURE_PROFILES", registry):
+        assert validate_profile(p) is p
+        p["max_skew_ns"] += 1
+        with pytest.raises(ConversionError, match="differs from its reviewed binding"):
+            validate_profile(p)

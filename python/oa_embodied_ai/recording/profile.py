@@ -11,6 +11,30 @@ from oa_embodied_ai.training.config import CANONICAL_CAMERA_KEYS
 APPROVED_CAPTURE_PROFILES = {}
 
 
+def capture_contract_digest(profile):
+    """Hash reviewed capture semantics, independently of per-episode identity."""
+    from oa_embodied_ai.training.inputs import json_sha256
+
+    fields = (
+        "capture_version",
+        "profile_id",
+        "native_profile_id",
+        "robot_configuration_id",
+        "fps",
+        "max_skew_ns",
+        "streams",
+        "components",
+        "state_channels",
+        "action_channels",
+        "state_names",
+        "action_names",
+        "source_commits",
+        "component_contract",
+        "phase_evidence",
+    )
+    return json_sha256({key: profile.get(key) for key in fields})
+
+
 def validate_profile(profile, *, development=False):
     if not isinstance(profile, dict) or profile.get("capture_version") != 1:
         raise ConversionError(
@@ -44,6 +68,14 @@ def validate_profile(profile, *, development=False):
         raise ConversionError(
             "Accepted profile requires owner approval_ref; the string alone is not approval evidence"
         )
+    if profile["origin"] != "synthetic":
+        reviewed = APPROVED_CAPTURE_PROFILES[profile["profile_id"]]
+        if reviewed.get("sha256") != capture_contract_digest(profile) or reviewed.get(
+            "approval_ref"
+        ) != profile.get("approval_ref"):
+            raise ConversionError(
+                "Unapproved profile: capture contract differs from its reviewed binding"
+            )
     if type(profile.get("fps")) is not int or profile["fps"] <= 0:
         raise ConversionError("fps must be a positive integer")
     if type(profile.get("max_skew_ns")) is not int or profile["max_skew_ns"] < 0:
