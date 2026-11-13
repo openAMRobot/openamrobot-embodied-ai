@@ -33,7 +33,9 @@ Local evidence is retained outside tracked source under
 `.verification/workstream-20261112/`. Exact commands, exit codes, dependency
 versions, source hashes and artifacts from clean-head verification are generated
 by `python/tools/verify_c10_c11.py`. Synthetic bags, MP4s, Parquet, checkpoints and
-large logs remain ignored. CI uploads the nonempty-suite/mutation evidence.
+large logs remain ignored. CI uploads the nonempty-suite/mutation evidence and an exact-head synthetic CDR bag,
+native dataset, raw NOT_VERIFIED C10 report and SHA256 manifest. The artifact
+helper returns software-path success only; it preserves raw C10 exit 2.
 
 Executed commands (repository root, Python 3.12.13 on macOS arm64):
 

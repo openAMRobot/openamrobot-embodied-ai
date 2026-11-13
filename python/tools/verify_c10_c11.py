@@ -124,6 +124,7 @@ def main(argv=None):
         "python/tests/capture_fixture.py",
         "python/native_tests/test_bag_conversion.py",
         "python/tools/prove_converter_negative.py",
+        "python/tools/generate_capture_evidence.py",
         "python/oa_embodied_ai/training",
         "python/oa_embodied_ai/evaluation",
         "python/tests/test_c11_gate.py",
