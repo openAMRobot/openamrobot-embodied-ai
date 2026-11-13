@@ -94,6 +94,7 @@ def main(argv=None):
     run("c10-negative", [py, "python/tools/prove_c10_negative.py"])
     run("c11-negative", [py, "python/tools/prove_c11_negative.py"])
     run("converter-negative", [py, "python/tools/prove_converter_negative.py"])
+    run("video-negative", [py, "python/tools/prove_video_negative.py"])
     run(
         "smoke",
         [
@@ -125,6 +126,10 @@ def main(argv=None):
         "python/native_tests/test_bag_conversion.py",
         "python/tools/prove_converter_negative.py",
         "python/tools/generate_capture_evidence.py",
+        "python/tools/run_bag_training_smoke.py",
+        "python/tools/prove_video_negative.py",
+        "python/tests/test_video_segments.py",
+        "python/oa_embodied_ai/dataset_qa/video.py",
         "python/oa_embodied_ai/training",
         "python/oa_embodied_ai/evaluation",
         "python/tests/test_c11_gate.py",

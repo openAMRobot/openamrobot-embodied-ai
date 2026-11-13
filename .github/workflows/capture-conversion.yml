@@ -35,14 +35,22 @@ jobs:
           python -m pytest python/tests python/native_tests/test_bag_conversion.py -q --junitxml=.verification/capture/tests.xml
           python python/tools/prove_converter_negative.py > .verification/capture/mutation.log 2>&1
           python python/tools/prove_converter_negative.py --native > .verification/capture/native-bag-mutation.log 2>&1
+          python python/tools/prove_video_negative.py > .verification/capture/video-boundary-revert.log 2>&1
       - name: Retain exact-head synthetic native artifacts and raw C10 decision
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python python/tools/generate_capture_evidence.py --output-dir .verification/capture/native-evidence --expected-head "$EXPECTED_HEAD" > .verification/capture/native-evidence.log 2>&1
+      - name: Execute synthetic converted-bag visual training pipeline
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python python/tools/run_bag_training_smoke.py --output-dir .verification/capture/bag-training --expected-head "$EXPECTED_HEAD" > .verification/capture/bag-training.log 2>&1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: synthetic-native-conversion-evidence
-          path: .verification/capture/
+          path: |
+            .verification/capture/
+            !.verification/capture/**/*.pt
+            !.verification/capture/**/*.pt.sha256
           include-hidden-files: true
           if-no-files-found: error

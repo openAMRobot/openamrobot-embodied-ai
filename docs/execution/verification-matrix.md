@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 # Execution evidence and owner gates — 12 November 2026
 
-Runtime base: `a1f92f58e28a7b10f0ae5e3550151a4d3c50291a`, the documentation-only
+Runtime base at the initial delivery (follow-up evidence below): `a1f92f58e28a7b10f0ae5e3550151a4d3c50291a`, the documentation-only
 follow-up to canonical C10/C11 draft #5. Source code is on the dependent
 `satya/capture-conversion-benchmark` branch. Contract proposal:
 [interfaces #39](https://github.com/openAMRobot/openamrobot-interfaces/pull/39),
@@ -75,3 +75,36 @@ See conversion/README and jetson-benchmark.md for sources/licences and commands.
 OpenAI Codex implemented the runtime/tests/docs and verified software. Original
 C10/C11 author credit and signatures are retained; no third-party implementation
 is copied and no safety controller, watchdog, arbiter or hardware output changes.
+
+## Continuation: multi-episode native conversion and generated model evidence
+
+The converter now exports an ordered collection of independent bags through one
+upstream native writer transaction, preserving episode IDs, task bindings, global
+indices and shared video offsets. Duplicate selections, incompatible capture
+semantics/origins/revisions, changed source bytes and malformed collections fail
+before output creation. An injected writer failure leaves sources unchanged and
+cleans the temporary destination. Every joint/camera source sample is checked
+before resampling, including samples between export-grid frames.
+
+Continuous software evidence now executes two distinct synthetic CDR bags ->
+actual native LeRobot loader -> C10 -> explicit synthetic C11 override -> visual
+training/backprop/checkpoint/reload/held-out offline evaluation. Synthetic QA
+fixtures supplement sidecars and immutable artifact bindings; native writer
+payloads stay byte-identical. Raw C10 remains NOT_VERIFIED/exit 2, and training
+without the override remains blocked. This closes the previously separate
+synthetic conversion/training demonstration; actual Gazebo and robot data remain
+unverified. `run_bag_training_smoke.py` produces the full evidence bundle. CI
+archives the reports/data and explicitly omits checkpoint bytes (hash retained).
+
+This test exposed a real shared-video boundary bug: six-decimal ffprobe timestamp
+text selected 5/3 rather than 4/4 frames at an adjacent 30 Hz episode boundary.
+C10 and C11 now share integer presentation timestamps plus rational video time
+bases. A temporary restoration of the old comparison produces exactly the
+expected assertion failure. C10 provenance includes the new helper's byte hash.
+
+Docker Desktop was started during this continuation. ROS Jazzy xacro expansion
+and `check_urdf` pass for the current pinned combined model in mock, Gazebo and
+real profiles. Generated arm/gripper ranges and the real-profile absence of a
+ROS lift command interface are checked in interfaces#39's follow-up. This is
+generated-model validation, not live Gazebo or physical execution. Source pins
+remain upperbody 2ca7392, platform 131e500, openarm_description 14ff67b.

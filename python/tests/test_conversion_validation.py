@@ -281,3 +281,70 @@ def test_registered_capture_semantics_are_immutable():
         p["max_skew_ns"] += 1
         with pytest.raises(ConversionError, match="differs from its reviewed binding"):
             validate_profile(p)
+
+
+def test_invalid_source_between_grid_frames_is_not_discarded():
+    from types import SimpleNamespace
+
+    from oa_embodied_ai.recording.bag import Sample, validate_source_samples
+
+    p, _ = profile_fixture()
+    p["state_channels"] = [p["state_channels"][0]]
+    p["action_channels"] = []
+    p["streams"] = []
+    channel = p["state_channels"][0]
+    data = {
+        "state": [
+            Sample(t, t, SimpleNamespace(name=[channel["joint"]], position=[v]))
+            for t, v in [(0, 0.0), (1, float("nan")), (33333333, 0.0)]
+        ]
+    }
+    with pytest.raises(ConversionError, match="Invalid numeric value.*left_arm"):
+        validate_source_samples(data, p)
+
+
+def test_boolean_capture_version_is_not_version_one():
+    p, _ = profile_fixture()
+    p["capture_version"] = True
+    with pytest.raises(ConversionError, match="Incompatible capture schema version"):
+        validate_profile(p, development=True)
+
+
+@pytest.mark.parametrize(
+    "document,message",
+    [
+        ({"collection_version": True, "episodes": []}, "collection_version 1"),
+        ({"collection_version": 1, "episodes": []}, "nonempty list"),
+        ({"collection_version": 1, "episodes": [{"bag": 7}]}, "requires bag"),
+        (
+            {
+                "collection_version": 1,
+                "episodes": [{"bag": 7, "profile": "p", "sidecar_template": "s"}],
+            },
+            "nonempty strings",
+        ),
+    ],
+)
+def test_malformed_batch_manifest_reports_requirement(tmp_path, document, message):
+    import json
+
+    from oa_embodied_ai.conversion.batch import convert_collection
+
+    path = tmp_path / "collection.json"
+    path.write_text(json.dumps(document))
+    with pytest.raises(ConversionError, match=message):
+        convert_collection(path, tmp_path / "out", development=True)
+    assert not (tmp_path / "out").exists()
+
+
+def test_duplicate_canonical_camera_mapping_is_not_silently_collapsed():
+    import copy
+
+    p, _ = profile_fixture()
+    duplicate = copy.deepcopy(p["streams"][-1])
+    duplicate.update(id="duplicate-camera", topic="/fixture/duplicate-camera")
+    p["streams"].append(duplicate)
+    with pytest.raises(
+        ConversionError, match="Duplicate or malformed canonical camera"
+    ):
+        validate_profile(p, development=True)

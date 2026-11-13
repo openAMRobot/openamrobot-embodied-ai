@@ -36,7 +36,11 @@ def capture_contract_digest(profile):
 
 
 def validate_profile(profile, *, development=False):
-    if not isinstance(profile, dict) or profile.get("capture_version") != 1:
+    if (
+        not isinstance(profile, dict)
+        or type(profile.get("capture_version")) is not int
+        or profile["capture_version"] != 1
+    ):
         raise ConversionError(
             "Incompatible capture schema version; expected capture_version 1"
         )
@@ -107,6 +111,13 @@ def validate_profile(profile, *, development=False):
         if stream["timestamp_source"] not in ("header", "bag"):
             raise ConversionError(f"Invalid clock mapping for '{stream['id']}'")
         if stream.get("camera_key"):
+            if (
+                not isinstance(stream["camera_key"], str)
+                or stream["camera_key"] in features
+            ):
+                raise ConversionError(
+                    "Duplicate or malformed canonical camera feature mapping"
+                )
             features.add(stream["camera_key"])
             if not stream.get("calibration_id"):
                 raise ConversionError(f"Missing calibration ID for '{stream['id']}'")
@@ -132,11 +143,14 @@ def validate_profile(profile, *, development=False):
         if profile.get(kind + "_names") != names:
             raise ConversionError(f"Invalid {kind} channel ordering")
         for c in channels:
-            if c.get("stream") not in ids:
+            if not isinstance(c.get("stream"), str) or c["stream"] not in ids:
                 raise ConversionError(
                     f"Component '{c.get('component')}' missing {kind} topic mapping"
                 )
-            if not all(c.get(k) for k in ("component", "unit", "source_unit", "field")):
+            if not all(
+                isinstance(c.get(k), str) and c[k]
+                for k in ("component", "unit", "source_unit", "field")
+            ):
                 raise ConversionError(f"Malformed {kind} mapping for '{c['name']}'")
             if (
                 c["component"] == "base"

@@ -133,12 +133,46 @@ def decode_image(msg):
     return np.ascontiguousarray(image[:, :, ::-1] if msg.encoding == "bgr8" else image)
 
 
+def validate_source_samples(data, profile):
+    """Reject invalid source messages even if they fall between export-grid frames."""
+    for kind in ("state", "action"):
+        by_stream = {}
+        for channel in profile[kind + "_channels"]:
+            by_stream.setdefault(channel["stream"], []).append(channel)
+        for stream, channels in by_stream.items():
+            for sample in data[stream]:
+                try:
+                    values = [extract(sample, c) for c in channels]
+                    normalize_vector(
+                        values,
+                        {
+                            "representation": "qpos",
+                            "names": [c["name"] for c in channels],
+                            "units": [c["source_unit"] for c in channels],
+                        },
+                        channels,
+                        profile=profile["profile_id"],
+                        components=list(
+                            dict.fromkeys(c["component"] for c in channels)
+                        ),
+                    )
+                except (TypeError, AttributeError, IndexError) as exc:
+                    raise ConversionError(
+                        f"Malformed {kind} source sample in stream '{stream}' at {sample.time_ns}"
+                    ) from exc
+    for stream in profile["streams"]:
+        if stream.get("camera_key"):
+            for sample in data[stream["id"]]:
+                decode_image(sample.message)
+
+
 def align(data, profile):
     """Nearest observations, causal commands; reject reuse, gaps and excess skew.
 
     The output is a sampling grid; acquisition/arrival times are retained in
     the sidecar, never replaced by that grid. No interpolation or padding.
     """
+    validate_source_samples(data, profile)
     start = max(v[0].time_ns for v in data.values())
     end = min(v[-1].time_ns for v in data.values())
     if end <= start:
