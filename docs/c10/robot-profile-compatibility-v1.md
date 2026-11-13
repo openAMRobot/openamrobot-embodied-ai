@@ -4,6 +4,30 @@
 2 November 2026. **Proposed integration mapping for owner review. No new production
 profile, bounds, recording policy or command channel is approved here.**
 
+## Review clarification — 12 November 2026
+
+PR #5 implements **the 16-channel interim arms/grippers adapter**, with a
+separate historical fixed-mast 19-channel experiment. Neither is the proposed
+lift-equipped/mobile full-body policy. Matching vector widths never establishes
+profile equivalence. The November 10 review's full-body request is tracked in
+[upperbody#35](https://github.com/openAMRobot/openamr-upperbody-sw/issues/35),
+with the existing C9 v1 descriptors extended additively in interfaces.
+
+Current model source at upperbody `2ca739202f5c51114de1520902e811817d9b2a62`
+confirms `lift_joint`, prismatic, 0–0.350 m for `dold_v4_350`. Mock/Gazebo
+profiles expose the position interface; the real profile does not. CTL-017
+telemetry/command capture remains [interfaces#30](https://github.com/openAMRobot/openamrobot-interfaces/issues/30).
+The model's `park` pose is a placeholder, not an approved stowed pose.
+
+The proposed full-body mapping includes lift state and reserves separately
+reviewed lift action semantics; it does not authorize a command because the
+joint exists. [Platform#116](https://github.com/openAMRobot/openamr-platform-sw/issues/116)
+requires separate requested policy/operator velocity, Nav2 goals/output,
+accepted arbitration output and firmware-applied telemetry. `cmd_vel_policy`
+and its age/timeout contract still need the platform contract process. Recorder
+work observes these streams; it changes no control, timeout or interlock logic.
+The following tables retain their November 2 provenance and profile versions.
+
 ## Exact sources and interpretation
 
 - C9: `openAMRobot/openamrobot-interfaces` at

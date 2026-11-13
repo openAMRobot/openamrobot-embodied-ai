@@ -23,3 +23,12 @@ See [audit](docs/c10/c11-integration-audit.md),
 [evidence](docs/c10/c11-integration-verification.md). C11-owner adoption and
 actual recording/release/profile policies remain pending. REAL_EPISODE_NOT_VERIFIED;
 physical and production acceptance NOT_VERIFIED. PR #3 remains draft.
+
+12 November 2026 — PR #5 remains the proposed canonical integration path: exact
+C10 and C11 contributor commits are ancestors, and #3/#4 stay open pending owner
+coordination. Documented 16-channel interim versus historical 19-channel scope
+and the current lift/base proposal dependencies. Existing-head local baseline:
+166 tests + 17 subtests passed; hosted C10/CPU/Python/ROS pass at 59bb4bf. Five
+Satya-authored commits still lack DCO sign-off; no shared history was rewritten.
+Physical/production acceptance remains NOT_VERIFIED. Recorder/converter/benchmark
+work is prepared separately for a dependent draft, not claimed as accepted here.
