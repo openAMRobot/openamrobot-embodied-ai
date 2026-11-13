@@ -46,6 +46,7 @@ def protocol(tmp_path):
             "strict_io.py",
             "contract.py",
             "handoff.py",
+            "video.py",
         )
     }
     report["episodes"][0]["sidecar"] = {

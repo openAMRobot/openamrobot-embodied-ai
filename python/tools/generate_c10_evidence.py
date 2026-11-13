@@ -24,7 +24,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE_FILES = ('python/oa_embodied_ai/dataset_qa/episode.py', 'python/oa_embodied_ai/dataset_qa/semantics.py', 'python/oa_embodied_ai/dataset_qa/strict_io.py', 'python/oa_embodied_ai/dataset_qa/contract.py', 'python/oa_embodied_ai/dataset_qa/handoff.py', 'python/tests/c10_fixture.py', 'python/tools/generate_c10_evidence.py', 'external/openamrobot-interfaces/schemas/json/c9-lerobot-dataset.schema.json', 'external/openamrobot-interfaces/schemas/yaml/c9-lerobot-dataset-valid.yaml')
+SOURCE_FILES = ('python/oa_embodied_ai/dataset_qa/episode.py', 'python/oa_embodied_ai/dataset_qa/semantics.py', 'python/oa_embodied_ai/dataset_qa/strict_io.py', 'python/oa_embodied_ai/dataset_qa/contract.py', 'python/oa_embodied_ai/dataset_qa/handoff.py', 'python/oa_embodied_ai/dataset_qa/video.py', 'python/tests/c10_fixture.py', 'python/tools/generate_c10_evidence.py', 'external/openamrobot-interfaces/schemas/json/c9-lerobot-dataset.schema.json', 'external/openamrobot-interfaces/schemas/yaml/c9-lerobot-dataset-valid.yaml')
 EXPECTED_SYNTHETIC_RESULT = {
     "process_exit_code": 2,
     "status": "NOT_VERIFIED",

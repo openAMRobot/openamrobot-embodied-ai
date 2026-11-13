@@ -163,6 +163,7 @@ def verify_training_gate(
                 "strict_io.py",
                 "contract.py",
                 "handoff.py",
+                "video.py",
             )
         }
         if provenance.get("checker_files_sha256") != expected_checker:

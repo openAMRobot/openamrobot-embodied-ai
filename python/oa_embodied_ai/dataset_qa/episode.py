@@ -19,6 +19,7 @@ import yaml
 from .strict_io import load_data, unique_pairs
 from .contract import load_c9_schema
 from .semantics import check_episode
+from .video import PROBE_ENTRIES, segment_positions
 
 
 
@@ -171,14 +172,13 @@ def videos(root, sidecar, info, episode, policy, emit):
             if not shutil.which("ffprobe"):
                 raise FileNotFoundError("ffprobe is unavailable; video decode/count was not performed")
             proc = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_frames",
-                                   "-show_entries", "frame=best_effort_timestamp_time,width,height", "-of", "json", str(path)],
+                                   "-show_entries", PROBE_ENTRIES, "-of", "json", str(path)],
                                   capture_output=True, text=True, timeout=60)
             if proc.returncode or proc.stderr.strip():
                 raise ValueError(proc.stderr or "ffprobe decode failed")
-            all_frames = json.loads(proc.stdout)["frames"]
-            positions = list(range(len(all_frames)))
-            if shared:
-                positions = [i for i,f in enumerate(all_frames) if start <= float(f["best_effort_timestamp_time"]) < end]
+            probe = json.loads(proc.stdout)
+            all_frames = probe["frames"]
+            positions = segment_positions(probe, start, end) if shared else segment_positions(probe)
             frames = [all_frames[i] for i in positions]
             shape = stream["frame"]
             valid = len(frames) == episode["length"] and all(f["width"] == shape["width"] and f["height"] == shape["height"] for f in frames)
@@ -305,7 +305,7 @@ def check_dataset(dataset_path, policy_path=None, episode_indices=None, *, c9_sc
     findings, reports = [], []
     provenance = {"c9_contract": None, "policy": None,
                   "checker_files_sha256": {name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
-                                           for name in ("episode.py", "semantics.py", "strict_io.py", "contract.py", "handoff.py")}}
+                                           for name in ("episode.py", "semantics.py", "strict_io.py", "contract.py", "handoff.py", "video.py")}}
     context = {"episode":None, "source": None}
     def emit(check_id,status,observed=None,expected=None,units=None,threshold=None,policy=None,fix="Resolve the reported mismatch.",frame=None,stream=None):
         findings.append(dict(check_id=check_id,status=status,severity={"PASS":"INFO","REJECT":"ERROR","NOT_VERIFIED":"BLOCKER"}[status],

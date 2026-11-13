@@ -27,6 +27,7 @@ from torch.utils.data import Dataset
 
 from ..dataset_qa.episode import inside, native_metadata, read_rows
 from ..dataset_qa.strict_io import load_data
+from ..dataset_qa.video import PROBE_ENTRIES, segment_positions
 
 LOG = logging.getLogger("oa-c11-dataset")
 
@@ -164,7 +165,7 @@ def _video_binding(root, info, episode, key):
             "v:0",
             "-show_frames",
             "-show_entries",
-            "frame=best_effort_timestamp_time",
+            PROBE_ENTRIES,
             "-of",
             "json",
             str(path),
@@ -176,20 +177,16 @@ def _video_binding(root, info, episode, key):
     )
     if process.stderr.strip():
         raise ValueError(process.stderr)
-    frames = json.loads(process.stdout)["frames"]
+    probe = json.loads(process.stdout)
     # Same half-open native video segment convention as C10. The kth native
     # episode frame maps to the kth decoded frame within that segment.
-    positions = list(range(len(frames)))
+    positions = segment_positions(probe)
     if shared:
         start, end = (
             episode[prefix + "from_timestamp"],
             episode[prefix + "to_timestamp"],
         )
-        positions = [
-            i
-            for i, f in enumerate(frames)
-            if start <= float(f["best_effort_timestamp_time"]) < end
-        ]
+        positions = segment_positions(probe, start, end)
     if len(positions) != episode["length"]:
         raise ValueError(f"Camera/native frame count mismatch: {key}")
     return path, positions
