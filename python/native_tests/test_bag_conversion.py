@@ -63,3 +63,31 @@ def test_clock_reset_bag(tmp_path):
     bag = write_bag(tmp_path / "bag", profile, corrupt_clock=True)
     with pytest.raises(ConversionError, match="Nonmonotonic or duplicate timestamps"):
         read_bag(bag, profile)
+
+
+def test_bag_missing_declared_lift_regression(tmp_path):
+    # Actual serialized JointState messages omit lift_joint while the selected
+    # recording profile declares it. This isolates pre-export presence checking;
+    # it does not adopt a full-body profile or invoke an exporter.
+    import copy
+
+    profile, _ = profile_fixture()
+    bag = write_bag(tmp_path / "missing-lift-bag", profile)
+    declared = copy.deepcopy(profile)
+    declared["components"].append("lift")
+    declared["state_channels"].append(
+        {
+            "name": "lift_joint",
+            "component": "lift",
+            "joint": "lift_joint",
+            "unit": "m",
+            "source_unit": "m",
+            "stream": "state",
+            "field": "position",
+        }
+    )
+    with pytest.raises(
+        ConversionError,
+        match="Missing required component 'lift'.*synthetic-c9-capture-v1",
+    ):
+        read_bag(bag, declared)
