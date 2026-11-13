@@ -98,7 +98,17 @@ def test_executed_eval_keeps_offline_and_acceptance_separate(trained, tmp_path, 
     assert report["provenance"]["checkpoint_sha256"] == file_sha256(
         summary["checkpoint_path"]
     )
-    assert report["provenance"]["dependencies"]["lerobot"] is None
+    # Dataset interoperability tooling may coexist with the custom C11 model.
+    # Installed-library provenance must report the environment, not assert absence.
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        expected_lerobot = version("lerobot")
+    except PackageNotFoundError:
+        expected_lerobot = None
+    assert report["provenance"]["dependencies"]["lerobot"] == expected_lerobot
+    assert "custom ACT-like" in report["provenance"]["model_implementation"]
+    assert "compatibility NOT_VERIFIED" in report["provenance"]["model_implementation"]
     assert json.loads(output.read_text()) == report
     markdown = output.with_suffix(".md").read_text()
     assert "NOT_VERIFIED_PHYSICAL" in markdown

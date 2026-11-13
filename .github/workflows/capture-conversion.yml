@@ -1,0 +1,42 @@
+name: Capture conversion and runtime tools
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  native-conversion:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: openAMRobot/openamrobot-interfaces
+          ref: 87ab8a936c97ab55ee74b8988ca3d7659160ea6a
+          path: external/openamrobot-interfaces
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install inspected native adapter and test dependencies
+        run: |
+          python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e 'python[test,native,training,conversion,benchmark]'
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Native bag conversion, regression and inference tests
+        run: |
+          mkdir -p .verification/capture
+          python -m pytest python/tests python/native_tests/test_bag_conversion.py -q --junitxml=.verification/capture/tests.xml
+          python python/tools/prove_converter_negative.py > .verification/capture/mutation.log 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: synthetic-native-conversion-evidence
+          path: .verification/capture/
+          include-hidden-files: true
+          if-no-files-found: error

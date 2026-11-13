@@ -32,3 +32,11 @@ and the current lift/base proposal dependencies. Existing-head local baseline:
 Satya-authored commits still lack DCO sign-off; no shared history was rewritten.
 Physical/production acceptance remains NOT_VERIFIED. Recorder/converter/benchmark
 work is prepared separately for a dependent draft, not claimed as accepted here.
+
+12 November 2026 — dependent capture/conversion/benchmark draft: shared component
+validation, explicit-unit import, observational bag CLI, native LeRobot 0.6.1
+writer/loader and inference-only timing/telemetry are implemented. Synthetic CDR
+bag conversion loads all four cameras and C10 remains NOT_VERIFIED/exit 2.
+Bounded synthetic visual C11 training/reload/offline evaluation executes; no rollout.
+Actual capture profiles are unregistered pending owners; ROS/Gazebo and Jetson
+execution remain BLOCKED/NOT_VERIFIED. See docs/execution and conversion/README.
