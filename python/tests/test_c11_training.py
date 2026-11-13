@@ -277,7 +277,17 @@ def test_bounded_cpu_training_and_honest_checkpoint(
     assert summary["gate_status"] == "NOT_VERIFIED"
     assert not set(summary["train_episodes"]) & set(summary["val_episodes"])
     assert summary["checkpoint_sha256"] == file_sha256(summary["checkpoint_path"])
-    assert summary["provenance"]["dependencies"]["lerobot"] is None
+    # Dataset interoperability tooling may coexist with the custom C11 model.
+    # Installed-library provenance must report the environment, not assert absence.
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        expected_lerobot = version("lerobot")
+    except PackageNotFoundError:
+        expected_lerobot = None
+    assert summary["provenance"]["dependencies"]["lerobot"] == expected_lerobot
+    assert "custom ACT-like" in summary["provenance"]["model_implementation"]
+    assert "compatibility NOT_VERIFIED" in summary["provenance"]["model_implementation"]
     markdown = (tmp_path / "run/c11_training_summary.md").read_text()
     assert (
         "NOT_VERIFIED_PHYSICAL" in markdown
