@@ -331,3 +331,78 @@ def test_registry_pass_cannot_override_native_qa(
                 policy_path=policy,
             )
         model.assert_not_called()
+
+
+def test_spatial_tokens_preserve_2d_coordinate_sensitivity(tiny_config):
+    tiny_config.spatial_tokens = True
+    torch.manual_seed(42)
+    model = ACTPolicy(tiny_config).eval()
+
+    num_cams = len(tiny_config.camera_keys)
+    img_tl = torch.zeros(1, num_cams, 3, 64, 64)
+    img_tl[:, :, :, :32, :32] = 1.0
+
+    img_br = torch.zeros(1, num_cams, 3, 64, 64)
+    img_br[:, :, :, 32:, 32:] = 1.0
+
+    assert img_tl.sum() == img_br.sum()
+
+    state = torch.zeros(1, tiny_config.state_dim)
+
+    with torch.no_grad():
+        out_tl, _, _ = model(state, img_tl)
+        out_br, _, _ = model(state, img_br)
+
+    assert not torch.allclose(out_tl, out_br)
+    tokens_sp = model.visual_backbone(img_tl, model.camera_identity)
+    assert tokens_sp.shape == (1, num_cams * 4, tiny_config.d_model)
+
+    tiny_config.spatial_tokens = False
+    torch.manual_seed(42)
+    model_ablated = ACTPolicy(tiny_config).eval()
+    with torch.no_grad():
+        out_abl_tl, _, _ = model_ablated(state, img_tl)
+        out_abl_br, _, _ = model_ablated(state, img_br)
+
+    assert out_abl_tl.shape == (1, tiny_config.chunk_size, tiny_config.action_dim)
+    assert out_abl_br.shape == (1, tiny_config.chunk_size, tiny_config.action_dim)
+    tokens_abl = model_ablated.visual_backbone(img_tl, model_ablated.camera_identity)
+    assert tokens_abl.shape == (1, num_cams, tiny_config.d_model)
+
+
+def test_profile_declared_camera_subset_enforces_order_and_presence(
+    synthetic_inputs, tiny_config
+):
+    root, _, _ = synthetic_inputs
+    tiny_config.expected_camera_keys = ["observation.images.head"]
+    tiny_config.camera_keys = ["observation.images.head"]
+
+    episodes = find_episode_parquet_files(root)
+    dataset = MultiCameraACTDataset(root, episodes, tiny_config)
+    assert len(dataset) > 0
+    sample = dataset[0]
+    assert sample["images"].shape == (1, 3, 32, 32)
+
+    images = sample["images"].unsqueeze(0)
+    state = sample["state"].unsqueeze(0)
+    model = ACTPolicy(tiny_config).eval()
+    pred, _, _ = model(state, images)
+    assert pred.shape == (1, tiny_config.chunk_size, tiny_config.action_dim)
+
+    tiny_config.camera_keys = ["observation.images.base"]
+    with pytest.raises(ValueError, match="Camera keys/order differ"):
+        ACTPolicy(tiny_config)
+    with pytest.raises(ValueError, match="Camera keys/order differ"):
+        MultiCameraACTDataset(root, episodes, tiny_config)
+
+    tiny_config.camera_keys = ["observation.images.head"]
+    from oa_embodied_ai.training.dataset import _CAPTURE_CACHE
+
+    for cap in _CAPTURE_CACHE.values():
+        cap.release()
+    _CAPTURE_CACHE.clear()
+
+    video = next((root / "videos" / "observation.images.head").rglob("*.mp4"))
+    video.unlink()
+    with pytest.raises((FileNotFoundError, subprocess.CalledProcessError)):
+        MultiCameraACTDataset(root, episodes, tiny_config)

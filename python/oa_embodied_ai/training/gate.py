@@ -170,7 +170,11 @@ def verify_training_gate(
             raise ValueError("C10 checker provenance mismatch")
         for episode in report["episodes"]:
             sidecar = episode["sidecar"]
-            if sidecar["sha256"] != manifest["files_sha256"].get(sidecar["path"]):
+            sidecar_posix = Path(sidecar["path"]).as_posix()
+            manifest_sha = manifest["files_sha256"].get(
+                sidecar_posix, manifest["files_sha256"].get(sidecar["path"])
+            )
+            if sidecar["sha256"] != manifest_sha:
                 raise ValueError("C10 sidecar provenance mismatch")
             if episode["data_origin"] != manifest["data_origin"]:
                 raise ValueError("C10 origin contradicts trusted input origin")

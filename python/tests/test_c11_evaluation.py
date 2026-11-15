@@ -10,6 +10,8 @@ import torch
 from oa_embodied_ai.evaluation.cli import evaluate_c11, main
 from oa_embodied_ai.evaluation.offline_eval import (
     compute_offline_metrics,
+    run_offline_eval,
+    temporal_ensemble_predict,
 )
 from oa_embodied_ai.evaluation.rollout_eval import (
     ClosedLoopRolloutEvaluator,
@@ -18,8 +20,13 @@ from oa_embodied_ai.evaluation.rollout_eval import (
 )
 from oa_embodied_ai.training.cli import train_act
 from oa_embodied_ai.training.config import get_profile_config
+from oa_embodied_ai.training.dataset import (
+    MultiCameraACTDataset,
+    find_episode_parquet_files,
+)
 from oa_embodied_ai.training.gate import TrainingBlockedError
 from oa_embodied_ai.training.inputs import file_sha256
+from oa_embodied_ai.training.model import ACTPolicy
 
 
 @pytest.fixture(scope="module")
@@ -189,3 +196,66 @@ def test_blocked_gate_prevents_eval_and_cli_returns_two(trained, tmp_path):
         assert result == 2
         model.assert_not_called()
     assert not output.exists()
+
+
+def test_streaming_offline_eval_matches_batch_metrics(synthetic_template):
+    root, _, _ = synthetic_template
+    cfg = get_profile_config("lerobot-v0.6.1-bi-openarm-position")
+    cfg.chunk_size, cfg.d_model, cfg.n_heads = 3, 32, 4
+    cfg.enc_layers = cfg.dec_layers = 1
+    cfg.dim_feedforward, cfg.image_size = 64, (32, 32)
+    cfg.dropout, cfg.device = 0.0, "cpu"
+
+    torch.manual_seed(42)
+    model = ACTPolicy(cfg).eval()
+
+    episodes = find_episode_parquet_files(root)
+    assert len(episodes) >= 2
+
+    streamed = run_offline_eval(model, root, episodes, cfg)
+
+    all_gt = []
+    all_pred = []
+    for ep in episodes:
+        ds = MultiCameraACTDataset(root, [ep], cfg)
+        state_raw = np.stack([s["state"] for s in ds.samples])
+        act_raw = ds.samples[0]["act_raw"]
+
+        class EpisodeImages:
+            def __getitem__(self, selection, dataset=ds):
+                return torch.stack(
+                    [
+                        dataset[i]["images"]
+                        for i in range(*selection.indices(len(dataset)))
+                    ]
+                )
+
+        pred = temporal_ensemble_predict(
+            model=model,
+            state_sequence=state_raw,
+            images_sequence=EpisodeImages(),
+            chunk_size=cfg.chunk_size,
+            device="cpu",
+            ensemble_lambda=0.01,
+        )
+        all_gt.append(act_raw)
+        all_pred.append(pred)
+
+    batch_gt = np.concatenate(all_gt, axis=0)
+    batch_pred = np.concatenate(all_pred, axis=0)
+    batch = compute_offline_metrics(
+        batch_gt, batch_pred, channel_names=cfg.channel_names
+    )
+
+    assert abs(streamed["overall_mae"] - batch["overall_mae"]) < 1e-6
+    assert abs(streamed["overall_mse"] - batch["overall_mse"]) < 1e-6
+
+    for ch in cfg.channel_names:
+        assert (
+            abs(streamed["per_channel"][ch]["mae"] - batch["per_channel"][ch]["mae"])
+            < 1e-6
+        )
+        assert (
+            abs(streamed["per_channel"][ch]["mse"] - batch["per_channel"][ch]["mse"])
+            < 1e-6
+        )

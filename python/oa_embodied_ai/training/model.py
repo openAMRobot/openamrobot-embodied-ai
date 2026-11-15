@@ -38,38 +38,78 @@ class SinusoidalPositionalEncoding(nn.Module):
         return x + self.pe[:, : x.size(1)]
 
 
-class MultiCameraVisualBackbone(nn.Module):
-    """Visual feature extraction backbone for canonical 4-camera streams."""
+def _build_2d_sinusoidal_pos_embed(
+    d_model: int, height: int, width: int, device: torch.device, dtype: torch.dtype
+) -> torch.Tensor:
+    """Return (1, 1, d_model, height, width) 2D sinusoidal positional embeddings."""
+    if d_model % 4 != 0:
+        raise ValueError(
+            "2D spatial positional encoding requires d_model divisible by 4"
+        )
+    half = d_model // 2
+    y_pos = torch.arange(height, device=device, dtype=torch.float32).unsqueeze(1)
+    x_pos = torch.arange(width, device=device, dtype=torch.float32).unsqueeze(1)
+    div = torch.exp(
+        torch.arange(0, half, 2, device=device, dtype=torch.float32)
+        * (-math.log(10000.0) / half)
+    )
+    pe_y = torch.zeros(height, half, device=device, dtype=torch.float32)
+    pe_y[:, 0::2] = torch.sin(y_pos * div)
+    pe_y[:, 1::2] = torch.cos(y_pos * div)
+    pe_x = torch.zeros(width, half, device=device, dtype=torch.float32)
+    pe_x[:, 0::2] = torch.sin(x_pos * div)
+    pe_x[:, 1::2] = torch.cos(x_pos * div)
+    grid_y = pe_y.unsqueeze(1).expand(height, width, half)
+    grid_x = pe_x.unsqueeze(0).expand(height, width, half)
+    grid = torch.cat([grid_y, grid_x], dim=-1).permute(2, 0, 1)  # (d_model, H, W)
+    return grid.unsqueeze(0).unsqueeze(0).to(dtype=dtype)
 
-    def __init__(self, d_model: int = 256, num_cameras: int = 4) -> None:
+
+class MultiCameraVisualBackbone(nn.Module):
+    """Visual feature extraction backbone preserving 2D spatial patch tokens."""
+
+    def __init__(
+        self, d_model: int = 256, num_cameras: int = 4, spatial_tokens: bool = True
+    ) -> None:
         super().__init__()
         self.d_model = d_model
         self.num_cameras = num_cameras
-
-        # Shared ResNet-18 visual encoder
+        self.spatial_tokens = spatial_tokens
         base_resnet = models.resnet18(weights=None)
-        # Remove fc layer
-        base_resnet.fc = nn.Identity()
-        self.backbone = base_resnet
+        self.stem = nn.Sequential(
+            base_resnet.conv1,
+            base_resnet.bn1,
+            base_resnet.relu,
+            base_resnet.maxpool,
+            base_resnet.layer1,
+            base_resnet.layer2,
+            base_resnet.layer3,
+            base_resnet.layer4,
+        )
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.spatial_proj = nn.Conv2d(512, d_model, kernel_size=1)
 
-        # Linear projection from ResNet-18 (512-dim) to transformer d_model
-        self.proj = nn.Linear(512, d_model)
-
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        """Extract multi-camera feature tokens.
-
-        Args:
-            images: Tensor of shape (B, num_cameras, 3, H, W).
-
-        Returns:
-            camera_tokens: Tensor of shape (B, num_cameras, d_model).
-        """
+    def forward(
+        self, images: torch.Tensor, camera_identity: torch.Tensor
+    ) -> torch.Tensor:
+        """Extract camera tokens of shape (B, num_cameras * patches, d_model)."""
         B, num_cams, C, H, W = images.shape
-        flat_imgs = images.view(B * num_cams, C, H, W)
-        features = self.backbone(flat_imgs)  # (B * num_cams, 512)
-        tokens = self.proj(features)  # (B * num_cams, d_model)
-        tokens = tokens.view(B, num_cams, self.d_model)
-        return tokens
+        feat_map = self.stem(images.view(B * num_cams, C, H, W))  # (B*N, 512, Hf, Wf)
+        if not self.spatial_tokens:
+            feat_map = self.avgpool(feat_map)  # (B*N, 512, 1, 1)
+        projected = self.spatial_proj(feat_map)  # (B*N, d_model, Hf, Wf)
+        _, _, Hf, Wf = projected.shape
+        tokens = projected.view(B, num_cams, self.d_model, Hf, Wf)
+        if self.spatial_tokens:
+            pos_2d = _build_2d_sinusoidal_pos_embed(
+                self.d_model, Hf, Wf, tokens.device, tokens.dtype
+            )
+            tokens = tokens + pos_2d
+        tokens = tokens + camera_identity.unsqueeze(-1).unsqueeze(-1)
+        # (B, num_cams, Hf, Wf, d_model) -> (B, num_cams * Hf * Wf, d_model)
+        return tokens.permute(0, 1, 3, 4, 2).reshape(
+            B, num_cams * Hf * Wf, self.d_model
+        )
 
 
 class CVAEEncoder(nn.Module):
@@ -101,6 +141,7 @@ class CVAEEncoder(nn.Module):
             dim_feedforward=dim_feedforward,
             dropout=dropout,
             batch_first=True,
+            norm_first=True,
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, num_layers=enc_layers
@@ -174,6 +215,7 @@ class TransformerDecoder(nn.Module):
             dim_feedforward=dim_feedforward,
             dropout=dropout,
             batch_first=True,
+            norm_first=True,
         )
         self.transformer_decoder = nn.TransformerDecoder(
             decoder_layer, num_layers=dec_layers
@@ -214,6 +256,7 @@ class ACTPolicy(nn.Module):
         self.visual_backbone = MultiCameraVisualBackbone(
             d_model=config.d_model,
             num_cameras=self.num_cameras,
+            spatial_tokens=config.spatial_tokens,
         )
 
         self.camera_identity = nn.Parameter(
@@ -249,6 +292,7 @@ class ACTPolicy(nn.Module):
 
     def reparameterize(self, mu: torch.Tensor, log_var: torch.Tensor) -> torch.Tensor:
         """Sample latent z using reparameterization trick."""
+        log_var = torch.clamp(log_var, -20.0, 20.0)
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
         return mu + eps * std
@@ -302,7 +346,7 @@ class ACTPolicy(nn.Module):
             )
 
         # 2. Extract visual features
-        camera_tokens = self.visual_backbone(images) + self.camera_identity
+        camera_tokens = self.visual_backbone(images, self.camera_identity)
 
         # 3. Assemble memory conditioning sequence
         z_token = self.latent_proj(z).unsqueeze(1)  # (B, 1, d_model)
@@ -340,6 +384,7 @@ class ACTPolicy(nn.Module):
 
         # KL divergence loss
         if mu is not None and log_var is not None:
+            log_var = torch.clamp(log_var, -20.0, 20.0)
             # D_KL(N(mu, sigma^2) || N(0, I)) = -0.5 * sum(1 + log_var - mu^2 - exp(log_var))
             kl_div = -0.5 * torch.sum(1.0 + log_var - mu.pow(2) - log_var.exp(), dim=-1)
             kl_loss = kl_div.mean()

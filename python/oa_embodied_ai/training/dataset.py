@@ -18,7 +18,7 @@ import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -115,47 +115,76 @@ def partition_episodes(episode_paths, eval_split=0.2, seed=42):
     return train, val, [e.episode_index for e in train], [e.episode_index for e in val]
 
 
+_CAPTURE_CACHE: dict[tuple[int, str], Any] = {}
+_MAX_CACHED_CAPTURES = 16
+
+
+def release_capture_cache(prefix: Optional[str] = None) -> None:
+    """Release and clear cached VideoCapture instances, optionally filtered by path prefix."""
+    import os
+
+    if prefix is None:
+        to_remove = list(_CAPTURE_CACHE.keys())
+    else:
+        norm_prefix = os.path.normcase(os.path.abspath(prefix))
+        to_remove = [
+            k
+            for k in list(_CAPTURE_CACHE.keys())
+            if norm_prefix in os.path.normcase(os.path.abspath(k[1])) or prefix in k[1]
+        ]
+    for k in to_remove:
+        cap = _CAPTURE_CACHE.pop(k, None)
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+
+
 def extract_video_frame(video_path, frame_idx):
     """Decode the exact native segment frame ordinal or fail visibly."""
+    import os
+
     import cv2
 
-    cap = cv2.VideoCapture(str(video_path))
-    try:
+    key = (os.getpid(), str(video_path))
+    cap = _CAPTURE_CACHE.get(key)
+    if cap is None or not cap.isOpened():
+        cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
+            cap.release()
             raise ValueError(f"Cannot open camera video: {video_path}")
+        if len(_CAPTURE_CACHE) >= _MAX_CACHED_CAPTURES:
+            _, oldest = _CAPTURE_CACHE.popitem()
+            oldest.release()
+        _CAPTURE_CACHE[key] = cap
+    current_pos = round(cap.get(cv2.CAP_PROP_POS_FRAMES))
+    if current_pos != frame_idx:
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ok, frame = cap.read()
-        if (
-            not ok
-            or frame is None
-            or round(cap.get(cv2.CAP_PROP_POS_FRAMES)) != frame_idx + 1
-        ):
-            raise ValueError(f"Cannot decode camera frame {frame_idx}: {video_path}")
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    finally:
-        cap.release()
-
-
-def _video_binding(root, info, episode, key):
-    template = info["video_path"]
-    index = episode["episode_index"]
-    shared = "{file_index" in template
-    prefix = f"videos/{key}/"
-    if shared and any(
-        prefix + name not in episode
-        for name in ("chunk_index", "file_index", "from_timestamp", "to_timestamp")
+    ok, frame = cap.read()
+    if (
+        not ok
+        or frame is None
+        or round(cap.get(cv2.CAP_PROP_POS_FRAMES)) != frame_idx + 1
     ):
-        raise ValueError(f"Missing shared-video binding: {key}")
-    path = inside(
-        root,
-        template.format(
-            video_key=key,
-            episode_index=index,
-            episode_chunk=index // info.get("chunks_size", 1000),
-            chunk_index=episode.get(prefix + "chunk_index"),
-            file_index=episode.get(prefix + "file_index"),
-        ),
-    )
+        _CAPTURE_CACHE.pop(key, None)
+        cap.release()
+        raise ValueError(f"Cannot decode camera frame {frame_idx}: {video_path}")
+    return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+
+_PROBE_CACHE: dict[tuple[str, int, int], dict] = {}
+
+
+def _probe_video(path: Path) -> dict:
+    try:
+        stat = path.stat()
+        cache_key = (str(path), stat.st_mtime_ns, stat.st_size)
+        cached = _PROBE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+    except OSError:
+        pass
     process = subprocess.run(
         [
             "ffprobe",
@@ -178,6 +207,35 @@ def _video_binding(root, info, episode, key):
     if process.stderr.strip():
         raise ValueError(process.stderr)
     probe = json.loads(process.stdout)
+    try:
+        stat = path.stat()
+        _PROBE_CACHE[(str(path), stat.st_mtime_ns, stat.st_size)] = probe
+    except OSError:
+        pass
+    return probe
+
+
+def _video_binding(root, info, episode, key):
+    template = info["video_path"]
+    index = episode["episode_index"]
+    shared = "{file_index" in template
+    prefix = f"videos/{key}/"
+    if shared and any(
+        prefix + name not in episode
+        for name in ("chunk_index", "file_index", "from_timestamp", "to_timestamp")
+    ):
+        raise ValueError(f"Missing shared-video binding: {key}")
+    path = inside(
+        root,
+        template.format(
+            video_key=key,
+            episode_index=index,
+            episode_chunk=index // info.get("chunks_size", 1000),
+            chunk_index=episode.get(prefix + "chunk_index"),
+            file_index=episode.get(prefix + "file_index"),
+        ),
+    )
+    probe = _probe_video(path)
     # Same half-open native video segment convention as C10. The kth native
     # episode frame maps to the kth decoded frame within that segment.
     positions = segment_positions(probe)
@@ -241,23 +299,23 @@ class MultiCameraACTDataset(Dataset):
         for key in self.camera_keys:
             if info["features"].get(key, {}).get("dtype") != "video":
                 raise ValueError(f"Missing canonical video feature: {key}")
+        sidecars_by_index: dict[int, dict] = {}
+        for path in sorted(
+            (self.dataset_path / "meta/openamrobot/episodes").glob("episode-*")
+        ):
+            if path.suffix not in (".json", ".yaml", ".yml"):
+                continue
+            loaded = load_data(path)
+            ep_idx = loaded["native_lerobot"]["episode_index"]
+            if ep_idx in sidecars_by_index:
+                raise ValueError("Expected one C9 sidecar per selected episode")
+            sidecars_by_index[ep_idx] = loaded
         for episode_ref in self.episode_paths:
             index = episode_ref.episode_index
             episode = all_episodes[index]
-            sidecars = [
-                path
-                for path in (self.dataset_path / "meta/openamrobot/episodes").glob(
-                    "episode-*"
-                )
-                if path.suffix in (".json", ".yaml", ".yml")
-            ]
-            matching = [
-                load_data(path)
-                for path in sidecars
-                if load_data(path)["native_lerobot"]["episode_index"] == index
-            ]
-            if len(matching) != 1:
+            if index not in sidecars_by_index:
                 raise ValueError("Expected one C9 sidecar per selected episode")
+            matching = [sidecars_by_index[index]]
             for key in ("observation.state", "action"):
                 descriptor = matching[0]["native_lerobot"]["features"][key]
                 if descriptor["profile"] != self.config.profile:

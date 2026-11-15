@@ -48,6 +48,7 @@ def temporal_ensemble_predict(
     accum = np.zeros((T + chunk_size, action_dim), dtype=np.float64)
     weight_sum = np.zeros(T + chunk_size, dtype=np.float64)
 
+    weights = np.exp(-ensemble_lambda * np.arange(chunk_size, dtype=np.float64))
     model.eval()
     with torch.no_grad():
         for t in range(T):
@@ -63,11 +64,9 @@ def temporal_ensemble_predict(
                 or not torch.isfinite(pred_chunk).all()
             ):
                 raise ValueError("Invalid predicted action chunk")
-            pred_np = pred_chunk[0].cpu().numpy()
-            for k in range(chunk_size):
-                w = np.exp(-ensemble_lambda * k)
-                accum[t + k] += w * pred_np[k]
-                weight_sum[t + k] += w
+            pred_np = pred_chunk[0].cpu().numpy().astype(np.float64)
+            accum[t : t + chunk_size] += weights[:, None] * pred_np
+            weight_sum[t : t + chunk_size] += weights
 
     safe_w = np.where(weight_sum[:T] > 0.0, weight_sum[:T], 1.0)
     return (accum[:T] / safe_w[:, None]).astype(np.float32)
@@ -185,8 +184,9 @@ def run_offline_eval(
     ensemble_lambda: float = 0.01,
 ) -> Dict[str, Any]:
     """Run offline evaluation over specified episode parquet files."""
-    all_gt: List[np.ndarray] = []
-    all_pred: List[np.ndarray] = []
+    abs_err_sum = np.zeros(config.action_dim, dtype=np.float64)
+    sq_err_sum = np.zeros(config.action_dim, dtype=np.float64)
+    total_steps = 0
     discontinuity_accum: List[float] = []
 
     for episode in episode_paths:
@@ -222,21 +222,48 @@ def run_offline_eval(
         )
         if disc is not None:
             discontinuity_accum.append(disc)
-        all_gt.append(act_raw)
-        all_pred.append(pred_ensembled)
 
-    if not all_gt:
+        if (
+            act_raw.ndim != 2
+            or act_raw.shape != pred_ensembled.shape
+            or not len(act_raw)
+            or not np.isfinite(act_raw).all()
+            or not np.isfinite(pred_ensembled).all()
+        ):
+            raise ValueError(
+                "Offline metrics require finite matching nonempty action matrices"
+            )
+
+        err = pred_ensembled.astype(np.float64) - act_raw.astype(np.float64)
+        abs_err_sum += np.sum(np.abs(err), axis=0)
+        sq_err_sum += np.sum(err**2, axis=0)
+        total_steps += len(act_raw)
+
+    if total_steps == 0:
         raise ValueError(
             f"No valid episodes found for offline evaluation under {dataset_path}"
         )
 
-    combined_gt = np.concatenate(all_gt, axis=0)
-    combined_pred = np.concatenate(all_pred, axis=0)
     mean_disc = float(np.mean(discontinuity_accum)) if discontinuity_accum else None
+    overall_mae = float(np.sum(abs_err_sum) / (total_steps * config.action_dim))
+    overall_mse = float(np.sum(sq_err_sum) / (total_steps * config.action_dim))
 
-    return compute_offline_metrics(
-        gt_actions=combined_gt,
-        pred_actions=combined_pred,
-        channel_names=config.channel_names,
-        chunk_discontinuity=mean_disc,
-    )
+    channel_names = config.channel_names
+    per_channel: Dict[str, Dict[str, float]] = {}
+    for ch in range(config.action_dim):
+        ch_name = (
+            channel_names[ch]
+            if channel_names and ch < len(channel_names)
+            else f"channel_{ch}"
+        )
+        per_channel[ch_name] = {
+            "mae": float(abs_err_sum[ch] / total_steps),
+            "mse": float(sq_err_sum[ch] / total_steps),
+        }
+
+    return {
+        "overall_mae": overall_mae,
+        "overall_mse": overall_mse,
+        "chunk_boundary_discontinuity": mean_disc,
+        "per_channel": per_channel,
+    }

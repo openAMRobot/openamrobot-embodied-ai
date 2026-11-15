@@ -65,7 +65,11 @@ class ACTConfig:
         default_factory=lambda: list(OPENAMROBOT_19DOF_CHANNELS)
     )
     camera_keys: List[str] = field(default_factory=lambda: list(CANONICAL_CAMERA_KEYS))
+    expected_camera_keys: List[str] = field(
+        default_factory=lambda: list(CANONICAL_CAMERA_KEYS)
+    )
     vision_backbone: str = "resnet18"
+    spatial_tokens: bool = True
     image_size: Tuple[int, int] = (224, 224)
     d_model: int = 256
     n_heads: int = 8
@@ -97,8 +101,20 @@ class ACTConfig:
             raise ValueError("Unsupported profile/dimension mix; no padding or slicing")
         if self.channel_names != expected:
             raise ValueError("Channel names/order differ from the selected profile")
-        if self.camera_keys != CANONICAL_CAMERA_KEYS:
-            raise ValueError("Four canonical cameras in explicit order are required")
+        if (
+            not self.expected_camera_keys
+            or len(set(self.expected_camera_keys)) != len(self.expected_camera_keys)
+            or not set(self.expected_camera_keys) <= set(CANONICAL_CAMERA_KEYS)
+            or [k for k in CANONICAL_CAMERA_KEYS if k in self.expected_camera_keys]
+            != list(self.expected_camera_keys)
+        ):
+            raise ValueError("Invalid expected_camera_keys declaration")
+        if self.camera_keys != self.expected_camera_keys:
+            raise ValueError(
+                "Camera keys/order differ from the selected profile declaration"
+            )
+        if type(self.spatial_tokens) is not bool:
+            raise ValueError("spatial_tokens must be a boolean")
         if self.vision_backbone != "resnet18":
             raise ValueError("Only the custom resnet18 backbone is implemented")
         for key in (
@@ -187,9 +203,13 @@ def load_config(path: Union[str, Path]) -> ACTConfig:
         cfg.latent_dim = m.get("latent_dim", cfg.latent_dim)
         cfg.dropout = m.get("dropout", cfg.dropout)
         cfg.vision_backbone = m.get("vision_backbone", cfg.vision_backbone)
+        cfg.spatial_tokens = m.get("spatial_tokens", cfg.spatial_tokens)
         cfg.image_size = tuple(m.get("image_size", cfg.image_size))
         if "camera_keys" in m:
             cfg.camera_keys = list(m["camera_keys"])
+            cfg.expected_camera_keys = list(m["camera_keys"])
+        if "expected_camera_keys" in m:
+            cfg.expected_camera_keys = list(m["expected_camera_keys"])
         if "channel_names" in m:
             cfg.channel_names = list(m["channel_names"])
         cfg.batch_size = t.get("batch_size", cfg.batch_size)
@@ -206,6 +226,8 @@ def load_config(path: Union[str, Path]) -> ACTConfig:
     # Flat dict format
     profile = data.get("profile", "openamrobot-fixed-mast-19dof")
     cfg = get_profile_config(profile)
+    if "camera_keys" in data and "expected_camera_keys" not in data:
+        cfg.expected_camera_keys = list(data["camera_keys"])
     for k, v in data.items():
         if hasattr(cfg, k):
             setattr(cfg, k, v)
@@ -233,8 +255,10 @@ def save_config(config: ACTConfig, path: Union[str, Path]) -> None:
             "latent_dim": config.latent_dim,
             "dropout": config.dropout,
             "vision_backbone": config.vision_backbone,
+            "spatial_tokens": config.spatial_tokens,
             "image_size": list(config.image_size),
             "camera_keys": config.camera_keys,
+            "expected_camera_keys": config.expected_camera_keys,
             "channel_names": config.channel_names,
         },
         "training": {

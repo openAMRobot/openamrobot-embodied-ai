@@ -116,7 +116,15 @@ def bound_snapshot(dataset_path, input_manifest_path, policy_path):
             shutil.copyfile(policy_path, policy_copy)
             assert_unchanged(root, manifest, policy_path)
             assert_unchanged(snapshot, manifest, policy_copy)
-            yield snapshot, policy_copy
+            try:
+                yield snapshot, policy_copy
+            finally:
+                try:
+                    from .dataset import release_capture_cache
+
+                    release_capture_cache()
+                except Exception:
+                    pass
             if file_sha256(input_manifest_path) != manifest_digest:
                 raise ValueError("Input manifest changed during execution")
             assert_unchanged(root, manifest, policy_path)
