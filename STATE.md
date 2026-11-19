@@ -60,3 +60,15 @@ label and C9 units (interfaces #41) remain owner decisions. Simulation only.
 On the recorded bag, validate_profile (development) and read_bag pass; export is
 still refused (first frame selects samples before the episode origin; arm
 command extraction, multi-source sidecar, lift units and ranges). No dataset.
+
+19 November 2026 (continued): Proposed conversion rules on the same draft, each
+declared in the profile and enabled by name (`--enable-proposed`): episode origin
+on the first complete grid with pre-origin frames dropped and counted, command
+semantics, controller-reference arm commands, multi-source vectors, lift stop
+index to metres, range tolerance at model limits (kept, counted, never clamped),
+held commands, lift_positioning from the lift commands and report-only lift-phase
+evidence. Defaults unchanged. Tests on messages recorded in run 44448676604
+(fixture baseline1_run44448676604_excerpts.json). The Baseline 1 profile now
+declares these rules and its simulator provenance. None is approved; a dataset
+converted with them is development evidence. Stowed-pose evidence is not
+available: `park` is a placeholder and the recorded arms are not in it.
