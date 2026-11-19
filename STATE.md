@@ -52,7 +52,11 @@ commands or actual Gazebo recording are claimed.
 19 November 2026: draft into satya/capture-conversion-benchmark (not main):
 declared equal-timestamp rule `keep_last` per stream (default unchanged: equal or
 decreasing stamps reject), dropped counts in the conversion manifest, tests on
-messages recorded in Gazebo run 44448676604 that fail on 9643da1. Proposed
+messages recorded in Gazebo run 44448676604 that fail on 9643da1; an empty
+header frame_id takes the declared configuration frame. Proposed
 Baseline 1 capture profile under configs/capture_profiles/proposed/, listed in
 PROPOSED_CAPTURE_PROFILES (never consulted for approval). Registration, origin
 label and C9 units (interfaces #41) remain owner decisions. Simulation only.
+On the recorded bag, validate_profile (development) and read_bag pass; export is
+still refused (first frame selects samples before the episode origin; arm
+command extraction, multi-source sidecar, lift units and ranges). No dataset.
