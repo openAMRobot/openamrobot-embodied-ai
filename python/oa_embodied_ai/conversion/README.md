@@ -77,6 +77,19 @@ optional streams need a separate profile. Headerless messages require an explici
 configuration frame source and receipt-time semantics. The fixture's
 `/fixture/*` topics are test-only, not proposed robot topics.
 
+Equal timestamps (Proposed, 19 Nov 2026). A stream's time is its header stamp
+(`timestamp_source: header`) or the bag receipt time (`bag`, required for
+headerless topics such as `/cmd_vel`, ordered as received). A decreasing time
+always rejects as a clock discontinuity. An equal time rejects unless the stream
+declares `equal_timestamp_rule: keep_last`; then the last sample of each stamp in
+bag order is kept and the dropped count per stream is written to the conversion
+manifest (`episodes[].stream_timestamps`). Alignment to the dataset grid is
+unchanged. Under simulation time the stamps are /clock values (1 ms in Gazebo
+Baseline 1), so two messages can share one: measured in openamr-upperbody-sw run
+44448676604, `/arm/joint_states` 122 equal header pairs in 53209 messages,
+`/cmd_vel` 1288 equal receipt times in 2952. The rule is part of the reviewed
+capture contract (streams are hashed); cameras keep strict refusal.
+
 Proposed canonical whole-body names/ranges live in interfaces PR #39. A lift
 profile must bind that component artifact by exact SHA256; state/action mapping
 must match it. Moving lift source samples (including samples between export-grid

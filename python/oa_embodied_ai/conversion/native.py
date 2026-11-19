@@ -7,7 +7,7 @@ import copy
 import importlib.metadata
 import json
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -200,6 +200,7 @@ class ConversionEpisode:
     template: dict
     source_bag: Path
     source_sha256: dict
+    timestamp_report: dict = field(default_factory=dict)
 
 
 def _features(episode):
@@ -369,6 +370,7 @@ def export_native_episodes(episodes, output):
                 "episode_id": e.profile["episode_id"],
                 "profile": e.profile,
                 "source_bag_sha256": e.source_sha256,
+                "stream_timestamps": e.timestamp_report,
             }
             for i, e in enumerate(episodes)
         ]

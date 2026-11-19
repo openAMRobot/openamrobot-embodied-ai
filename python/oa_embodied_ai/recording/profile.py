@@ -10,6 +10,18 @@ from oa_embodied_ai.training.config import CANONICAL_CAMERA_KEYS
 # cannot grant acceptance. Registration is a reviewed code change, not a CLI flag.
 APPROVED_CAPTURE_PROFILES = {}
 
+# Proposed capture profiles awaiting owner review. Never consulted by
+# validate_profile: an entry here grants nothing. Registering one is moving it to
+# APPROVED_CAPTURE_PROFILES with status accepted and an owner approval_ref.
+PROPOSED_CAPTURE_PROFILES = {
+    "openamrobot-baseline1-gazebo-sim-oracle-v1": {
+        "path": "configs/capture_profiles/proposed/openamrobot-baseline1-gazebo-sim-oracle-v1.json",
+        "sha256": "f63c36f18fd04354b0203695d467c8e6cc77549a572f32913921757194525ddf",
+        "status": "proposed",
+        "evidence": "openamr-upperbody-sw run 44448676604 (Gazebo, sim-oracle); simulation only",
+    },
+}
+
 
 def capture_contract_digest(profile):
     """Hash reviewed capture semantics, independently of per-episode identity."""
@@ -110,6 +122,12 @@ def validate_profile(profile, *, development=False):
         topics.add(stream["topic"])
         if stream["timestamp_source"] not in ("header", "bag"):
             raise ConversionError(f"Invalid clock mapping for '{stream['id']}'")
+        if "equal_timestamp_rule" in stream and stream["equal_timestamp_rule"] not in (
+            "keep_last",
+        ):
+            raise ConversionError(
+                f"Unknown equal_timestamp_rule for '{stream['id']}'; only keep_last is defined"
+            )
         if stream.get("camera_key"):
             if (
                 not isinstance(stream["camera_key"], str)

@@ -21,8 +21,24 @@ class Sample:
     message: object
 
 
-def read_bag(path, profile):
+def read_bag(path, profile, report=None):
+    """Read the declared streams in bag (receipt) order.
+
+    A stream's time is its header stamp (`timestamp_source: header`) or the bag
+    receipt time (`bag`). A decreasing time is a clock discontinuity and always
+    rejects. An equal time rejects too, unless the stream declares
+    `equal_timestamp_rule: keep_last`: then, of a group of samples with one
+    time, the last one in bag order (receipt order) is kept and the earlier ones are counted in
+    `report`, never silently. Under simulation time two messages can carry one
+    /clock value; the rule names which of them a frame uses, it does not
+    reorder, interpolate or invent a time.
+    """
     from rosbags.highlevel import AnyReader
+
+    counts = {
+        s["id"]: {"messages": 0, "equal_timestamp_dropped": 0}
+        for s in profile["streams"]
+    }
 
     path = Path(path)
     if not (path / "metadata.yaml").is_file():
@@ -61,10 +77,21 @@ def read_bag(path, profile):
                         header.stamp.nanosec
                     )
                 samples = result[stream["id"]]
-                if samples and stamp <= samples[-1].time_ns:
+                counts[stream["id"]]["messages"] += 1
+                if samples and (
+                    stamp < samples[-1].time_ns
+                    or (
+                        stamp == samples[-1].time_ns
+                        and stream.get("equal_timestamp_rule") != "keep_last"
+                    )
+                ):
                     raise ConversionError(
                         f"Nonmonotonic or duplicate timestamps / clock discontinuity: '{stream['id']}'"
                     )
+                if samples and stamp == samples[-1].time_ns:
+                    samples[-1] = Sample(stamp, receipt, msg)
+                    counts[stream["id"]]["equal_timestamp_dropped"] += 1
+                    continue
                 samples.append(Sample(stamp, receipt, msg))
     except ConversionError:
         raise
@@ -83,6 +110,12 @@ def read_bag(path, profile):
             raise ConversionError(
                 f"Required stream '{stream['id']}' contains no messages"
             )
+    if report is not None:
+        for stream in profile["streams"]:
+            entry = counts[stream["id"]]
+            entry["timestamp_source"] = stream["timestamp_source"]
+            entry["equal_timestamp_rule"] = stream.get("equal_timestamp_rule")
+            report[stream["id"]] = entry
     return result
 
 

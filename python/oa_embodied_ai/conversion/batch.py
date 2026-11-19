@@ -14,12 +14,15 @@ from oa_embodied_ai.training.inputs import inventory
 def prepare_episode(bag, profile, template, *, development=False):
     profile = validate_profile(profile, development=development)
     source_hashes = inventory(bag)
-    data = read_bag(bag, profile)
+    timestamps = {}
+    data = read_bag(bag, profile, report=timestamps)
     validate_recording_phases(data, profile)
     frames = align(data, profile)
     if inventory(bag) != source_hashes:
         raise ConversionError("Source bag artifacts changed during capture validation")
-    return ConversionEpisode(frames, profile, template, Path(bag), source_hashes)
+    return ConversionEpisode(
+        frames, profile, template, Path(bag), source_hashes, timestamps
+    )
 
 
 def convert_collection(path, output, *, development=False, validate_only=False):
