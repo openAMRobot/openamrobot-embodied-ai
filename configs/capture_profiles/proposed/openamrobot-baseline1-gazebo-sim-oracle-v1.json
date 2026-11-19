@@ -1,0 +1,993 @@
+{
+  "capture_version": 1,
+  "profile_id": "openamrobot-baseline1-gazebo-sim-oracle-v1",
+  "status": "proposed",
+  "origin": "simulation",
+  "episode_id": "baseline1-run-44448676604",
+  "dataset_id": "openamrobot/baseline1-gazebo-sim-oracle",
+  "dataset_revision": "run-44448676604",
+  "task": "Baseline 1: drive to the work shelf, lift, grasp the item from the tote, lift it, retreat",
+  "robot_configuration_id": "unknown: not declared in /build1/run_info",
+  "fps": 5,
+  "max_skew_ns": 100000000,
+  "proposed_rules": [
+    "episode_origin",
+    "controller_reference",
+    "command_semantics",
+    "vector_segments",
+    "stop_index",
+    "range_tolerance",
+    "held_command",
+    "lift_positioning_from_command",
+    "lift_phase_report",
+    "reference_integrity"
+  ],
+  "episode_origin": "first_complete_grid",
+  "units": "radians for every angular channel (decision #79; interfaces CCR #41); metres for the lift, the lift command as a declared stop target in metres (stop_index); m/s and rad/s for the base",
+  "streams": [
+    {
+      "id": "left_wrist_camera_image",
+      "component": "camera",
+      "topic": "/left_wrist_camera/image",
+      "type": "sensor_msgs/msg/Image",
+      "frame_id": "left_wrist_camera_optical_frame",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "camera_key": "observation.images.camera_wrist_left",
+      "calibration_id": "gazebo-camera-info:/left_wrist_camera/camera_info:320x240:fx233.8714"
+    },
+    {
+      "id": "right_wrist_camera_image",
+      "component": "camera",
+      "topic": "/right_wrist_camera/image",
+      "type": "sensor_msgs/msg/Image",
+      "frame_id": "right_wrist_camera_optical_frame",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "camera_key": "observation.images.camera_wrist_right",
+      "calibration_id": "gazebo-camera-info:/right_wrist_camera/camera_info:320x240:fx233.8714"
+    },
+    {
+      "id": "head_camera_rgbd_image",
+      "component": "camera",
+      "topic": "/head_camera/rgbd/image",
+      "type": "sensor_msgs/msg/Image",
+      "frame_id": "head_camera_optical_frame",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "camera_key": "observation.images.head",
+      "calibration_id": "gazebo-camera-info:/head_camera/rgbd/camera_info:640x360:fx320.2549"
+    },
+    {
+      "id": "base_camera_rgbd_image",
+      "component": "camera",
+      "topic": "/base_camera/rgbd/image",
+      "type": "sensor_msgs/msg/Image",
+      "frame_id": "base_camera_color_optical_frame",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "camera_key": "observation.images.base",
+      "calibration_id": "gazebo-camera-info:/base_camera/rgbd/camera_info:640x480:fx554.3827"
+    },
+    {
+      "id": "arm_joint_states",
+      "component": "left_arm",
+      "topic": "/arm/joint_states",
+      "type": "sensor_msgs/msg/JointState",
+      "frame_id": "base_link",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "equal_timestamp_rule": "keep_last"
+    },
+    {
+      "id": "left_arm_controller_controller_state",
+      "component": "left_arm",
+      "topic": "/left_arm_controller/controller_state",
+      "type": "control_msgs/msg/JointTrajectoryControllerState",
+      "frame_id": "base_link",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "equal_timestamp_rule": "keep_last",
+      "frame_id_source": "configuration"
+    },
+    {
+      "id": "build1_capture_gripper_command",
+      "component": "left_gripper",
+      "topic": "/build1/capture/gripper_command",
+      "type": "sensor_msgs/msg/JointState",
+      "frame_id": "base_link",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "equal_timestamp_rule": "keep_last",
+      "frame_id_source": "configuration"
+    },
+    {
+      "id": "right_arm_controller_controller_state",
+      "component": "right_arm",
+      "topic": "/right_arm_controller/controller_state",
+      "type": "control_msgs/msg/JointTrajectoryControllerState",
+      "frame_id": "base_link",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "equal_timestamp_rule": "keep_last",
+      "frame_id_source": "configuration"
+    },
+    {
+      "id": "joint_states",
+      "component": "lift",
+      "topic": "/joint_states",
+      "type": "sensor_msgs/msg/JointState",
+      "frame_id": "base_link",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "equal_timestamp_rule": "keep_last",
+      "frame_id_source": "configuration"
+    },
+    {
+      "id": "sil_lift_command",
+      "component": "lift",
+      "topic": "/sil/lift/command",
+      "type": "std_msgs/msg/Int8",
+      "frame_id": "base_link",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "bag",
+      "frame_id_source": "configuration",
+      "equal_timestamp_rule": "keep_last",
+      "hold": {
+        "rule": "until_next",
+        "before_first": {
+          "field_value": 0,
+          "check_state_channel": "lift_joint",
+          "tolerance": 0.003,
+          "source": "the lift holds its calibrated stop until the first command; stop 0 (L1000) is checked against the first measured lift_joint within the scene's arrival tolerance (rig.py LIFT_STOP_TOLERANCE_M 0.003 m, a simulation value)"
+        }
+      }
+    },
+    {
+      "id": "odom",
+      "component": "base",
+      "topic": "/odom",
+      "type": "nav_msgs/msg/Odometry",
+      "frame_id": "odom",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "header",
+      "equal_timestamp_rule": "keep_last"
+    },
+    {
+      "id": "cmd_vel",
+      "component": "base",
+      "topic": "/cmd_vel",
+      "type": "geometry_msgs/msg/Twist",
+      "frame_id": "base_link",
+      "clock_domain": "ros.sim_time",
+      "timestamp_source": "bag",
+      "frame_id_source": "configuration",
+      "equal_timestamp_rule": "keep_last",
+      "hold": {
+        "rule": "while_zero"
+      }
+    }
+  ],
+  "components": [
+    "left_arm",
+    "left_gripper",
+    "right_arm",
+    "right_gripper",
+    "lift",
+    "base"
+  ],
+  "state_channels": [
+    {
+      "name": "openarm_left_joint1",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -3.4907,
+        1.3963
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_left_joint1",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint2",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -3.3161,
+        0.17453
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_left_joint2",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint3",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_left_joint3",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint4",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        0.0,
+        2.4435
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_left_joint4",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint5",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_left_joint5",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint6",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -0.7854,
+        0.7854
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_left_joint6",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint7",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_left_joint7",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_finger_joint1",
+      "component": "left_gripper",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        0.0,
+        0.7854
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_left_finger_joint1",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint1",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -1.3963,
+        3.4907
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_right_joint1",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint2",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -0.17453,
+        3.3161
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_right_joint2",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint3",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_right_joint3",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint4",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        0.0,
+        2.4435
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_right_joint4",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint5",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_right_joint5",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint6",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -0.7854,
+        0.7854
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_right_joint6",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint7",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_right_joint7",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_finger_joint1",
+      "component": "right_gripper",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -0.7854,
+        0.0
+      ],
+      "stream": "arm_joint_states",
+      "joint": "openarm_right_finger_joint1",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "lift_joint",
+      "component": "lift",
+      "unit": "m",
+      "source_unit": "m",
+      "field": "position",
+      "range": [
+        0.0,
+        0.35
+      ],
+      "stream": "joint_states",
+      "joint": "lift_joint",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "base_linear_x",
+      "component": "base",
+      "unit": "m/s",
+      "source_unit": "m/s",
+      "field": "twist.twist.linear.x",
+      "range": null,
+      "stream": "odom"
+    },
+    {
+      "name": "base_angular_z",
+      "component": "base",
+      "unit": "rad/s",
+      "source_unit": "rad/s",
+      "field": "twist.twist.angular.z",
+      "range": null,
+      "stream": "odom"
+    }
+  ],
+  "action_channels": [
+    {
+      "name": "openarm_left_joint1",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -3.4907,
+        1.3963
+      ],
+      "stream": "left_arm_controller_controller_state",
+      "joint": "openarm_left_joint1",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint2",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -3.3161,
+        0.17453
+      ],
+      "stream": "left_arm_controller_controller_state",
+      "joint": "openarm_left_joint2",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint3",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "left_arm_controller_controller_state",
+      "joint": "openarm_left_joint3",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint4",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        0.0,
+        2.4435
+      ],
+      "stream": "left_arm_controller_controller_state",
+      "joint": "openarm_left_joint4",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint5",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "left_arm_controller_controller_state",
+      "joint": "openarm_left_joint5",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint6",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -0.7854,
+        0.7854
+      ],
+      "stream": "left_arm_controller_controller_state",
+      "joint": "openarm_left_joint6",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_joint7",
+      "component": "left_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "left_arm_controller_controller_state",
+      "joint": "openarm_left_joint7",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_left_finger_joint1",
+      "component": "left_gripper",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        0.0,
+        0.7854
+      ],
+      "stream": "build1_capture_gripper_command",
+      "joint": "openarm_left_finger_joint1",
+      "semantics": "held_gripper_goal",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint1",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -1.3963,
+        3.4907
+      ],
+      "stream": "right_arm_controller_controller_state",
+      "joint": "openarm_right_joint1",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint2",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -0.17453,
+        3.3161
+      ],
+      "stream": "right_arm_controller_controller_state",
+      "joint": "openarm_right_joint2",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint3",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "right_arm_controller_controller_state",
+      "joint": "openarm_right_joint3",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint4",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        0.0,
+        2.4435
+      ],
+      "stream": "right_arm_controller_controller_state",
+      "joint": "openarm_right_joint4",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint5",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "right_arm_controller_controller_state",
+      "joint": "openarm_right_joint5",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint6",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -0.7854,
+        0.7854
+      ],
+      "stream": "right_arm_controller_controller_state",
+      "joint": "openarm_right_joint6",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_joint7",
+      "component": "right_arm",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "reference.positions",
+      "range": [
+        -1.5708,
+        1.5708
+      ],
+      "stream": "right_arm_controller_controller_state",
+      "joint": "openarm_right_joint7",
+      "names_field": "joint_names",
+      "semantics": "controller_reference",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "openarm_right_finger_joint1",
+      "component": "right_gripper",
+      "unit": "rad",
+      "source_unit": "rad",
+      "field": "position",
+      "range": [
+        -0.7854,
+        0.0
+      ],
+      "stream": "build1_capture_gripper_command",
+      "joint": "openarm_right_finger_joint1",
+      "semantics": "held_gripper_goal",
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "lift_joint",
+      "component": "lift",
+      "unit": "m",
+      "source_unit": "stop_index",
+      "field": "data",
+      "range": [
+        0.0,
+        0.35
+      ],
+      "stream": "sil_lift_command",
+      "semantics": "lift_stop_target",
+      "stop_targets": {
+        "values": [
+          0.0,
+          0.175,
+          0.35
+        ],
+        "ids": [
+          "L1000",
+          "L1175",
+          "L1350"
+        ],
+        "unit": "m",
+        "source": "openAMRobot/.github decisions.yaml at 87c8486: ARM-MOUNT (shoulder z = 1.000 + lift q), CONFIG-IDS and LIFT (calibrated stops L1000, L1175, L1350); index order and metres from openamr-upperbody-sw a20746338701 rig.py LIFT_STOP_M and LIFT_STOP_ID, openamrobot.srdf group_state L1000/L1175/L1350"
+      },
+      "range_tolerance": 0.001
+    },
+    {
+      "name": "base_linear_x",
+      "component": "base",
+      "unit": "m/s",
+      "source_unit": "m/s",
+      "field": "linear.x",
+      "range": null,
+      "stream": "cmd_vel",
+      "semantics": "requested_velocity"
+    },
+    {
+      "name": "base_angular_z",
+      "component": "base",
+      "unit": "rad/s",
+      "source_unit": "rad/s",
+      "field": "angular.z",
+      "range": null,
+      "stream": "cmd_vel",
+      "semantics": "requested_velocity"
+    }
+  ],
+  "state_names": [
+    "openarm_left_joint1",
+    "openarm_left_joint2",
+    "openarm_left_joint3",
+    "openarm_left_joint4",
+    "openarm_left_joint5",
+    "openarm_left_joint6",
+    "openarm_left_joint7",
+    "openarm_left_finger_joint1",
+    "openarm_right_joint1",
+    "openarm_right_joint2",
+    "openarm_right_joint3",
+    "openarm_right_joint4",
+    "openarm_right_joint5",
+    "openarm_right_joint6",
+    "openarm_right_joint7",
+    "openarm_right_finger_joint1",
+    "lift_joint",
+    "base_linear_x",
+    "base_angular_z"
+  ],
+  "action_names": [
+    "openarm_left_joint1",
+    "openarm_left_joint2",
+    "openarm_left_joint3",
+    "openarm_left_joint4",
+    "openarm_left_joint5",
+    "openarm_left_joint6",
+    "openarm_left_joint7",
+    "openarm_left_finger_joint1",
+    "openarm_right_joint1",
+    "openarm_right_joint2",
+    "openarm_right_joint3",
+    "openarm_right_joint4",
+    "openarm_right_joint5",
+    "openarm_right_joint6",
+    "openarm_right_joint7",
+    "openarm_right_finger_joint1",
+    "lift_joint",
+    "base_linear_x",
+    "base_angular_z"
+  ],
+  "source_commits": {
+    "openamr-upperbody-sw": "a20746338701e7961c28ba4650e11996a1a76919",
+    "openamr-platform-sw": "931e631db661b16d1057dfd1ab1d13ea606482e2",
+    "openarm_can": "bfd4e52194aefe38389fa6e670be3738136facb9",
+    "openarm_description": "14ff67b638ff1c738a1b9a6be8aaa5ce5ed2c831",
+    "openarm_ros2": "4e837e1d0dae692ff67b560b69d8d281d7a8d4ed",
+    "openamrobot-interfaces": "43ec67747b1087163f3b220fbcf3ee44eb31c2e5"
+  },
+  "component_contract": {
+    "path": "external/openamrobot-interfaces-c9-components/profiles/c9/mobile-lift-qpos-v1-proposed.json",
+    "sha256": "a9639779d9f5a249b3f353bf2d6b6828c906a9bbcc9dd536b4116ce738094a39",
+    "source": "openAMRobot/openamrobot-interfaces PR #39 head 43ec67747b1087163f3b220fbcf3ee44eb31c2e5 (Proposed)"
+  },
+  "provenance": {
+    "run_id": "44448676604",
+    "run_head_sha": "a20746338701e7961c28ba4650e11996a1a76919",
+    "artifact": "baseline1-acceptance-attempt1",
+    "launch_profile": "firmware_sil",
+    "acceptance_profile": "sim-oracle",
+    "pose_source": "ground_truth",
+    "object_pose_source": "ground_truth",
+    "run_info": "missing from the bag (/build1/run_info not discovered; recorder fix in openamr-upperbody-sw d58cb2a unit-tested only)",
+    "time": "simulation time (/clock); bag recorded with --use-sim-time",
+    "planning_pose_source": "ground_truth",
+    "origin_declaration": "Gazebo Harmonic simulation (sim-oracle, ground-truth poses), simulation time; simulation data, never robot data",
+    "declarations_source": "job 135306975778 log of run 44448676604: \"acceptance profile: sim-oracle, pose_source: ground_truth\", \"planning_pose_source: ground_truth\", \"object_pose_source: ground_truth\", Build 1 scene {\"profile\": \"firmware_sil\", \"devices\": true, \"driver_clock\": \"gazebo\", \"driver_rate_hz\": 500, \"step_s\": 0.001}",
+    "workflow": "openamr-upperbody-sw .github/workflows/baseline1-acceptance.yml, job 135306975778 (Baseline 1 whole-robot mission)",
+    "simulator": {
+      "gz_sim": "8.15.0 (ros-jazzy-gz-sim-vendor 0.0.13-1noble.20261031.125555)",
+      "sdformat": "14.9.0 (ros-jazzy-sdformat-vendor 0.0.14-1noble.20261031.120928)",
+      "gz_tools_vendor": "0.0.8-1noble.20261025.230735",
+      "physics_engine": "gz-physics-dartsim-plugin (ros-jazzy-gz-physics-vendor 0.0.10-1noble.20261031.122410, ros-jazzy-gz-dartsim-vendor 0.0.3-1noble.20260225.232143)",
+      "step_s": 0.001,
+      "seed": "20261117 (BASELINE1_SEED: Python random and the ROS domain; Gazebo started without a seed argument)",
+      "model_sha256": "e1a3c33d59f6c5628f1329c42fe04b67e11d1720db4a2f65e1dfae211885a2e2",
+      "rtf_max_whole_run": 0.1951,
+      "source": "job 135306975778 log of run 44448676604 (environment GZ_SIM_VERSION, SDFORMAT_VERSION, installed vendor packages, mission event 'run profile firmware_sil, step fast, engine gz-physics-dartsim-plugin, model sha256 ...')"
+    }
+  },
+  "proposal": {
+    "status": "Proposed; not registered. Registration is a reviewed change to APPROVED_CAPTURE_PROFILES by the embodied-AI owner with the software lead (status accepted, approval_ref, digest).",
+    "prepared_from": "openamr-upperbody-sw PR #91 docs/ai/capture_profile_baseline1_gazebo_candidate.json at d58cb2ae5477d2f4f06b55a4a9671abb1729f7fd",
+    "rules": "Proposed conversion rules this profile depends on (none approved): episode_origin, controller_reference, command_semantics, vector_segments, stop_index, range_tolerance, held_command, lift_positioning_from_command, lift_phase_report. Each is enabled by name (oa-convert-bag --enable-proposed RULE)."
+  },
+  "timestamp_rule": {
+    "rule": "keep_last on every non-camera stream; cameras keep strict refusal",
+    "measured_in": "run 44448676604 (measurement run 44465407013): equal header stamps /arm/joint_states 122 of 53209, left/right controller_state 117/94; equal receipt times /cmd_vel 1288 of 2952; cameras, /joint_states, /odom, gripper command none"
+  },
+  "frame_rule": {
+    "rule": "streams whose recorded header frame_id is empty, or that have no header, take base_link from configuration (frame_id_source: configuration)",
+    "streams": [
+      "left_arm_controller_controller_state",
+      "build1_capture_gripper_command",
+      "right_arm_controller_controller_state",
+      "joint_states",
+      "sil_lift_command",
+      "cmd_vel"
+    ]
+  },
+  "vector_segments": {
+    "state": [
+      {
+        "stream": "arm_joint_states",
+        "names": [
+          "openarm_left_joint1",
+          "openarm_left_joint2",
+          "openarm_left_joint3",
+          "openarm_left_joint4",
+          "openarm_left_joint5",
+          "openarm_left_joint6",
+          "openarm_left_joint7",
+          "openarm_left_finger_joint1",
+          "openarm_right_joint1",
+          "openarm_right_joint2",
+          "openarm_right_joint3",
+          "openarm_right_joint4",
+          "openarm_right_joint5",
+          "openarm_right_joint6",
+          "openarm_right_joint7",
+          "openarm_right_finger_joint1"
+        ]
+      },
+      {
+        "stream": "joint_states",
+        "names": [
+          "lift_joint"
+        ]
+      },
+      {
+        "stream": "odom",
+        "names": [
+          "base_linear_x",
+          "base_angular_z"
+        ]
+      }
+    ],
+    "action": [
+      {
+        "stream": "left_arm_controller_controller_state",
+        "names": [
+          "openarm_left_joint1",
+          "openarm_left_joint2",
+          "openarm_left_joint3",
+          "openarm_left_joint4",
+          "openarm_left_joint5",
+          "openarm_left_joint6",
+          "openarm_left_joint7"
+        ]
+      },
+      {
+        "stream": "build1_capture_gripper_command",
+        "names": [
+          "openarm_left_finger_joint1"
+        ]
+      },
+      {
+        "stream": "right_arm_controller_controller_state",
+        "names": [
+          "openarm_right_joint1",
+          "openarm_right_joint2",
+          "openarm_right_joint3",
+          "openarm_right_joint4",
+          "openarm_right_joint5",
+          "openarm_right_joint6",
+          "openarm_right_joint7"
+        ]
+      },
+      {
+        "stream": "build1_capture_gripper_command",
+        "names": [
+          "openarm_right_finger_joint1"
+        ]
+      },
+      {
+        "stream": "sil_lift_command",
+        "names": [
+          "lift_joint"
+        ]
+      },
+      {
+        "stream": "cmd_vel",
+        "names": [
+          "base_linear_x",
+          "base_angular_z"
+        ]
+      }
+    ]
+  },
+  "phase_evidence": {
+    "base_stream": "odom",
+    "lift_positioning": {
+      "source": "command_to_arrival",
+      "command_channel": "lift_joint",
+      "state_channel": "lift_joint",
+      "arrival_tolerance": 0.003
+    },
+    "stowed_pose_review": {
+      "status": "placeholder",
+      "pose": "park",
+      "source": "openamr-upperbody-sw a20746338701 openamrobot.srdf group_state park: a placeholder until the safe-pose definition under the manipulation action contract; not a reviewed stowed pose"
+    },
+    "stowed_joints_rad": {
+      "openarm_left_joint1": 0.0,
+      "openarm_left_joint2": 0.0,
+      "openarm_left_joint3": 0.0,
+      "openarm_left_joint4": 0.1,
+      "openarm_left_joint5": 0.0,
+      "openarm_left_joint6": 0.0,
+      "openarm_left_joint7": 0.0,
+      "openarm_right_joint1": 0.0,
+      "openarm_right_joint2": 0.0,
+      "openarm_right_joint3": 0.0,
+      "openarm_right_joint4": 0.1,
+      "openarm_right_joint5": 0.0,
+      "openarm_right_joint6": 0.0,
+      "openarm_right_joint7": 0.0
+    },
+    "pose_tolerance_rad": 0.01,
+    "pose_tolerance_source": "A7 named-pose final error TOLERANCE 0.01 rad (a7_support.py, simulation)",
+    "on_missing_evidence": "report"
+  },
+  "integrity": {
+    "canonical_angular_unit": "rad",
+    "canonical_angular_velocity_unit": "rad/s",
+    "degrees": "only through an explicit LeRobot adapter outside the canonical dataset (founder decision 19 Nov 2026; interfaces CCR #41)",
+    "action_convention": "latest_at_or_before",
+    "camera_sync_max_skew_ns": 100000000,
+    "gripper": {
+      "unit": "rad",
+      "channels": {
+        "openarm_left_finger_joint1": {
+          "opening_sign": 1
+        },
+        "openarm_right_finger_joint1": {
+          "opening_sign": -1
+        }
+      },
+      "source": "finger joint position in radians, no gripper width; the right finger is mirrored: its range is [-0.7854, 0] against [0, 0.7854] for the left (Proposed C9 component contract, interfaces PR #39 head 43ec67747b10), and the recorded right finger command is negative (-0.0036 rad at 6.153 s, run 44448676604)"
+    },
+    "calibration_sources": {
+      "left_wrist_camera_image": "/left_wrist_camera/camera_info",
+      "right_wrist_camera_image": "/right_wrist_camera/camera_info",
+      "head_camera_rgbd_image": "/head_camera/rgbd/camera_info",
+      "base_camera_rgbd_image": "/base_camera/rgbd/camera_info"
+    },
+    "robot_model": {
+      "sha256": "e1a3c33d59f6c5628f1329c42fe04b67e11d1720db4a2f65e1dfae211885a2e2",
+      "source": "openamr-upperbody-sw run 44448676604, job 135306975778 log: Build 1 scene \"model_sha256\" (the run's /build1/run_info is not in the bag)"
+    }
+  }
+}

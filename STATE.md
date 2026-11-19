@@ -48,3 +48,40 @@ integer PTS and rational time bases; reverting to decimal-text comparison fails
 the regression. Actual capture-profile acceptance and physical results remain
 NOT_VERIFIED. Docker is running for isolated generated-model checks; no physical
 commands or actual Gazebo recording are claimed.
+
+19 November 2026: draft into satya/capture-conversion-benchmark (not main):
+declared equal-timestamp rule `keep_last` per stream (default unchanged: equal or
+decreasing stamps reject), dropped counts in the conversion manifest, tests on
+messages recorded in Gazebo run 44448676604 that fail on 9643da1; an empty
+header frame_id takes the declared configuration frame. Proposed
+Baseline 1 capture profile under configs/capture_profiles/proposed/, listed in
+PROPOSED_CAPTURE_PROFILES (never consulted for approval). Registration, origin
+label and C9 units (interfaces #41) remain owner decisions. Simulation only.
+On the recorded bag, validate_profile (development) and read_bag pass; export is
+still refused (first frame selects samples before the episode origin; arm
+command extraction, multi-source sidecar, lift units and ranges). No dataset.
+
+19 November 2026 (continued): Proposed conversion rules on the same draft, each
+declared in the profile and enabled by name (`--enable-proposed`): episode origin
+on the first complete grid with pre-origin frames dropped and counted, command
+semantics, controller-reference arm commands, multi-source vectors, lift stop
+index to metres, range tolerance at model limits (kept, counted, never clamped),
+held commands, lift_positioning from the lift commands and report-only lift-phase
+evidence. Defaults unchanged. Tests on messages recorded in run 44448676604
+(fixture baseline1_run44448676604_excerpts.json). The Baseline 1 profile now
+declares these rules and its simulator provenance. None is approved; a dataset
+converted with them is development evidence. Stowed-pose evidence is not
+available: `park` is a placeholder and the recorded arms are not in it.
+
+19 November 2026 (continued): Proposed `reference_integrity` on the same draft:
+named integrity checks on the recorded messages (units and degrees, ranges with
+tolerance, lift metres, gripper opening signs with the mirrored right finger,
+read/kept/dropped counts against metadata.yaml, action[t] latest at or before t with
+one-frame shift detection, camera presence and skew against the grid, camera_info
+consistency, no template hash in the sidecar); recorded camera_info and model hashes
+in the C9 sidecar; `conversion.json` binds bag, configuration and output hashes; and
+`oa-verify-reference` recomputes the conversion from the bag. Tests on a 5 s slice of
+run 44448676604 (python/tests/fixtures/baseline1_slice, recorded bytes) with one
+positive and one negative per check; prove_reference_negative.py reverts each check.
+Proposed profile digest now aad2e963 (integrity block added). Nothing is approved;
+a dataset converted with these rules is development evidence, simulation only.

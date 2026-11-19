@@ -1,0 +1,390 @@
+rosbag2_bagfile_information:
+  compression_format: ''
+  compression_mode: ''
+  custom_data: null
+  duration:
+    nanoseconds: 4997000000
+  files:
+  - duration:
+      nanoseconds: 4997000000
+    message_count: 8098
+    path: baseline1_slice.mcap
+    starting_time:
+      nanoseconds_since_epoch: 37500000000
+  message_count: 8098
+  relative_file_paths:
+  - baseline1_slice.mcap
+  ros_distro: rosbags
+  starting_time:
+    nanoseconds_since_epoch: 37500000000
+  storage_identifier: mcap
+  topics_with_message_count:
+  - message_count: 2415
+    topic_metadata:
+      name: /arm/joint_states
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: transient_local
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/JointState
+      type_description_hash: 
+        RIHS01_a13ee3a330e346c9d87b5aa18d24e11690752bd33a0350f11c5882bc9179260e
+  - message_count: 30
+    topic_metadata:
+      name: /base_camera/rgbd/camera_info
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/CameraInfo
+      type_description_hash: 
+        RIHS01_b3dfd68ff46c9d56c80fd3bd4ed22c7a4ddce8c8348f2f59c299e73118e7e275
+  - message_count: 30
+    topic_metadata:
+      name: /base_camera/rgbd/image
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/Image
+      type_description_hash: 
+        RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+  - message_count: 100
+    topic_metadata:
+      name: /build1/capture/gripper_command
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/JointState
+      type_description_hash: 
+        RIHS01_a13ee3a330e346c9d87b5aa18d24e11690752bd33a0350f11c5882bc9179260e
+  - message_count: 31
+    topic_metadata:
+      name: /cmd_vel
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: geometry_msgs/msg/Twist
+      type_description_hash: 
+        RIHS01_9c45bf16fe0983d80e3cfe750d6835843d265a9a6c46bd2e609fcddde6fb8d2a
+  - message_count: 30
+    topic_metadata:
+      name: /head_camera/rgbd/camera_info
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/CameraInfo
+      type_description_hash: 
+        RIHS01_b3dfd68ff46c9d56c80fd3bd4ed22c7a4ddce8c8348f2f59c299e73118e7e275
+  - message_count: 30
+    topic_metadata:
+      name: /head_camera/rgbd/image
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/Image
+      type_description_hash: 
+        RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+  - message_count: 250
+    topic_metadata:
+      name: /joint_states
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/JointState
+      type_description_hash: 
+        RIHS01_a13ee3a330e346c9d87b5aa18d24e11690752bd33a0350f11c5882bc9179260e
+  - message_count: 2415
+    topic_metadata:
+      name: /left_arm_controller/controller_state
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: transient_local
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: control_msgs/msg/JointTrajectoryControllerState
+      type_description_hash: 
+        RIHS01_51d8dd89cc624cbe9daaeeb4d80d6de9b86168ffdc3be41fefc0953e3c26e480
+  - message_count: 25
+    topic_metadata:
+      name: /left_wrist_camera/camera_info
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/CameraInfo
+      type_description_hash: 
+        RIHS01_b3dfd68ff46c9d56c80fd3bd4ed22c7a4ddce8c8348f2f59c299e73118e7e275
+  - message_count: 25
+    topic_metadata:
+      name: /left_wrist_camera/image
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/Image
+      type_description_hash: 
+        RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+  - message_count: 250
+    topic_metadata:
+      name: /odom
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: nav_msgs/msg/Odometry
+      type_description_hash: 
+        RIHS01_3cc97dc7fb7502f8714462c526d369e35b603cfc34d946e3f2eda2766dfec6e0
+  - message_count: 2416
+    topic_metadata:
+      name: /right_arm_controller/controller_state
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: transient_local
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: control_msgs/msg/JointTrajectoryControllerState
+      type_description_hash: 
+        RIHS01_51d8dd89cc624cbe9daaeeb4d80d6de9b86168ffdc3be41fefc0953e3c26e480
+  - message_count: 25
+    topic_metadata:
+      name: /right_wrist_camera/camera_info
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/CameraInfo
+      type_description_hash: 
+        RIHS01_b3dfd68ff46c9d56c80fd3bd4ed22c7a4ddce8c8348f2f59c299e73118e7e275
+  - message_count: 25
+    topic_metadata:
+      name: /right_wrist_camera/image
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: sensor_msgs/msg/Image
+      type_description_hash: 
+        RIHS01_d31d41a9a4c4bc8eae9be757b0beed306564f7526c88ea6a4588fb9582527d47
+  - message_count: 1
+    topic_metadata:
+      name: /sil/lift/command
+      offered_qos_profiles:
+      - avoid_ros_namespace_conventions: false
+        deadline:
+          nsec: 854775807
+          sec: 9223372036
+        depth: 0
+        durability: volatile
+        history: unknown
+        lifespan:
+          nsec: 854775807
+          sec: 9223372036
+        liveliness: automatic
+        liveliness_lease_duration:
+          nsec: 854775807
+          sec: 9223372036
+        reliability: reliable
+      serialization_format: cdr
+      type: std_msgs/msg/Int8
+      type_description_hash: 
+        RIHS01_26525065a403d972cb672f0777e333f0c799ad444ae5fcd79e43d1e73bd0f440
+  version: 9

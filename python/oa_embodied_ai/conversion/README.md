@@ -77,6 +77,68 @@ optional streams need a separate profile. Headerless messages require an explici
 configuration frame source and receipt-time semantics. The fixture's
 `/fixture/*` topics are test-only, not proposed robot topics.
 
+Equal timestamps (Proposed, 19 Nov 2026). A stream's time is its header stamp
+(`timestamp_source: header`) or the bag receipt time (`bag`, required for
+headerless topics such as `/cmd_vel`, ordered as received). A decreasing time
+always rejects as a clock discontinuity. An equal time rejects unless the stream
+declares `equal_timestamp_rule: keep_last`; then the last sample of each stamp in
+bag order is kept and the dropped count per stream is written to the conversion
+manifest (`episodes[].stream_timestamps`). Alignment to the dataset grid is
+unchanged. Under simulation time the stamps are /clock values (1 ms in Gazebo
+Baseline 1), so two messages can share one: measured in openamr-upperbody-sw run
+44448676604, `/arm/joint_states` 122 equal header pairs in 53209 messages,
+`/cmd_vel` 1288 equal receipt times in 2952. The rule is part of the reviewed
+capture contract (streams are hashed); cameras keep strict refusal.
+
+Empty header frames (Proposed, 19 Nov 2026). A header-stamped message whose
+`frame_id` is empty (JointState, controller states) takes the stream's declared
+`frame_id` when the stream sets `frame_id_source: configuration`; a non-empty
+header frame must still equal the declared frame.
+
+Proposed conversion rules (19 Nov 2026, none approved). A profile lists the
+rules it relies on in `proposed_rules` (hashed with the capture contract) and the
+caller enables each by name: `oa-convert-bag ... --enable-proposed RULE`. A
+declared rule that is not enabled, or a declaration whose rule is not listed,
+refuses; without declarations nothing changes. The conversion manifest records
+`proposed_rules_enabled` and states that the dataset is development evidence.
+
+| Rule | Declaration | Behaviour |
+| --- | --- | --- |
+| `episode_origin` | `episode_origin: first_complete_grid` | Grid times are multiples of 1/fps in the clock domain; the origin is the first grid time at or after the latest first sample of the required streams. Leading frames that select a sample (time or receipt) before it are dropped and counted (`alignment.episode_origin`); the recording interval covers every referenced timestamp. |
+| `command_semantics` | `semantics` per action channel | Actions are commanded values (`controller_reference`, `held_gripper_goal`, `lift_stop_target`, `requested_velocity`), states measured, from disjoint streams. The sidecar states the relationship: action[t] is the latest request at or before t, observation[t] the measured samples nearest t. |
+| `controller_reference` | `names_field: joint_names`, `field: reference.positions` | Arm commands read from `JointTrajectoryControllerState.reference` as recorded; no new publisher. |
+| `vector_segments` | `vector_segments.state/action`: ordered `{stream, names}` | A vector from several streams. The single-source check stays for undeclared vectors; the C9 v1 entry describes the composed vector, its per-frame time is the earliest selected segment sample and its source frame ID names every segment sample. |
+| `stop_index` | `source_unit: stop_index`, `stop_targets` | An integer stop index maps to its declared target (`L1000/L1175/L1350` to 0.0/0.175/0.350 m from the decisions register ARM-MOUNT and CONFIG-IDS); other indices refuse. |
+| `range_tolerance` | `range_tolerance` per ranged channel | A value outside its range by at most the tolerance is kept unchanged (never clamped) and counted per channel (`alignment.range_tolerance_flags`). |
+| `held_command` | stream `hold: {rule: until_next or while_zero, before_first}` | A command holds its last message beyond `max_skew_ns`: always (`until_next`) or only while every commanded value is zero (`while_zero`). `before_first` is the value before the first message, checked against the first measured state. Held streams do not bound the episode; held frames are counted. |
+| `lift_positioning_from_command` | `phase_evidence.lift_positioning` | lift_positioning intervals from each lift command to arrival (or the next command). |
+| `lift_phase_report` | `phase_evidence.on_missing_evidence: report` | Missing lift-phase evidence is written to the manifest (`lift_phase`, status NOT_VERIFIED) instead of refusing. A stowed-pose review object needs `status: reviewed` and an `approval_ref`; a placeholder never passes. |
+| `reference_integrity` | `integrity`: canonical units, `action_convention`, `camera_sync_max_skew_ns`, `gripper` opening signs, `calibration_sources`, `robot_model` | Checks on the recorded messages that refuse with a named code: `UNITS_DEGREES`, `UNITS`, `UNITS_RANGE` (says when a value fits degrees, millimetres or a stop index), `LIFT_UNIT`, `GRIPPER_SIGN`, `TIMESTAMP_RECONCILE` (read = kept + dropped = the bag's metadata.yaml count, consecutive grid), `ACTION_CONVENTION` (action[t] is the latest command at or before t; a one-frame shift is named), `CAMERA_MISSING`, `CAMERA_SYNC`, `CALIBRATION_MISMATCH`, `TEMPLATE_HASH`. The sidecar takes the recorded camera_info and model hashes; `conversion.json` gains `reference` (configuration hashes, sidecar template, output file hashes) and each episode a `reference` report (bag file hashes, metadata counts, recording run and commits, calibration, NOT_AVAILABLE items, check results). |
+
+`--enable-proposed proposed_capture_profile` (caller only) converts a profile listed
+in `PROPOSED_CAPTURE_PROFILES` when its contract digest matches, with its bound
+Proposed C9 component contract; the manifest records `profile_registered: false`.
+
+Registration of the Baseline 1 profile (for the embodied-AI owner and the
+software lead). The exact entry for the current contract digest is:
+
+```python
+APPROVED_CAPTURE_PROFILES = {
+    "openamrobot-baseline1-gazebo-sim-oracle-v1": {
+        "sha256": "aad2e9636cf2d06406199e568d5b69100139e1fc22b79240f44f72038f6ecbce",
+        "approval_ref": "<owner approval reference>",
+    },
+}
+```
+
+with `"status": "accepted"` and the same `approval_ref` in the profile (neither
+field is part of the digest). The profile carries its provenance: run id, run head
+SHA, source commits, simulator and physics versions, model hash, seed, acceptance
+profile `sim-oracle`, pose sources `ground_truth`. While its rules stay Proposed,
+conversion still needs `--enable-proposed`; a rule decision changes the profile
+and so its digest. Actual-data export also needs the C9 component contract
+(interfaces #39) accepted.
+
 Proposed canonical whole-body names/ranges live in interfaces PR #39. A lift
 profile must bind that component artifact by exact SHA256; state/action mapping
 must match it. Moving lift source samples (including samples between export-grid
@@ -150,3 +212,19 @@ The old decimal comparison is restored only in an isolated mutation proof and
 causes the expected regression failure. Source-sample validation also runs before
 resampling, so invalid joint values or corrupt camera messages between export-grid
 frames cannot disappear silently.
+
+### Verify a reference dataset (Proposed)
+
+`oa-verify-reference DATASET --bag BAG [--run-log LOG] [--require-clean-converter]`
+recomputes the conversion from the bag with the profile, rules and sidecar template
+recorded in `conversion.json` and refuses on the first difference:
+`TAMPERED_OUTPUT` (a file differs from `reference.output_sha256`), `SOURCE_MISMATCH`
+(bag files), `MANIFEST_MISMATCH` (an episode report), `SIDECAR_MISMATCH`,
+`STATE_MISMATCH`, `ACTION_SHIFTED` / `ACTION_MISMATCH` (stored float32 actions against
+the recomputed ones), `TIMESTAMP_MISMATCH`, `VIDEO_FRAMES` (decoded frame counts) and,
+with `--run-log`, `ROBOT_MODEL` (the model hash must appear in the recording run log).
+Video pixels are not compared with the bag. A PASS is development evidence only.
+The test fixture `python/tests/fixtures/baseline1_slice` is a 5 s slice of run
+44448676604 cut with `python/tools/cut_bag_slice.py` (bytes unchanged; provenance in
+`baseline1_slice_provenance.json`); `python/tools/prove_reference_negative.py`
+reverts each check in a source copy and requires its test to fail.

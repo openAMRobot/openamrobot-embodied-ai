@@ -1,0 +1,36 @@
+{
+  "_provenance": "Recorded messages, bytes unchanged: openAMRobot/openamr-upperbody-sw Actions run 44448676604 (Baseline 1, Gazebo simulation time, sim-oracle), artifact baseline1-acceptance-attempt1 (artifact digest sha256:1b591b40c9c69ae9c0a2f55b4dd624552c84cd1a9f0a57fe62d5e73a99dce43c), bag ws/build1_logs/bag. Cut by python/tools/cut_bag_slice.py at 5edc497 in openamr-upperbody-sw scratch/ai-capture-e2e 17f5b07, run 44587791069. Simulation only, never robot data.",
+  "bytes": 1154412,
+  "messages_per_topic": {
+    "/arm/joint_states": 2415,
+    "/base_camera/rgbd/camera_info": 30,
+    "/base_camera/rgbd/image": 30,
+    "/build1/capture/gripper_command": 100,
+    "/cmd_vel": 31,
+    "/head_camera/rgbd/camera_info": 30,
+    "/head_camera/rgbd/image": 30,
+    "/joint_states": 250,
+    "/left_arm_controller/controller_state": 2415,
+    "/left_wrist_camera/camera_info": 25,
+    "/left_wrist_camera/image": 25,
+    "/odom": 250,
+    "/right_arm_controller/controller_state": 2416,
+    "/right_wrist_camera/camera_info": 25,
+    "/right_wrist_camera/image": 25,
+    "/sil/lift/command": 1
+  },
+  "output_sha256": {
+    "baseline1_slice.mcap": "810bda868eb7a7e695439effe8d10ddf96bd7ed0adc949c2e9931e354d831b06",
+    "metadata.yaml": "1d704f5773f9b0a13ec0e2edf9e0a05138d7aa09efa4ef049dbadb875882c313"
+  },
+  "source_bag_sha256": {
+    "bag_0.mcap": "4b1f23f220b1b8aaedeff6da34e76131aee62373399683bd083087418459bf50",
+    "metadata.yaml": "cf2a9bb5fc3dcfc0476a6fb1372df863e2ae956f137e456c8cf327e829d27f47"
+  },
+  "window_choice": "first candidate window that aligns with the Baseline 1 profile and holds the lift command (40.524 s), equal header stamps on /arm/joint_states (10) and a changing action; it starts before the last /cmd_vel message preceding the lift (37.82 s)",
+  "window_receipt_ns": [
+    37500000000,
+    42500000000
+  ],
+  "window_rule": "bag receipt time start <= t < stop (rosbags AnyReader.messages start/stop)"
+}
