@@ -71,47 +71,51 @@
       "component": "left_arm",
       "topic": "/left_arm_controller/controller_state",
       "type": "control_msgs/msg/JointTrajectoryControllerState",
-      "frame_id": "",
+      "frame_id": "base_link",
       "clock_domain": "ros.sim_time",
       "timestamp_source": "header",
-      "equal_timestamp_rule": "keep_last"
+      "equal_timestamp_rule": "keep_last",
+      "frame_id_source": "configuration"
     },
     {
       "id": "build1_capture_gripper_command",
       "component": "left_gripper",
       "topic": "/build1/capture/gripper_command",
       "type": "sensor_msgs/msg/JointState",
-      "frame_id": "",
+      "frame_id": "base_link",
       "clock_domain": "ros.sim_time",
       "timestamp_source": "header",
-      "equal_timestamp_rule": "keep_last"
+      "equal_timestamp_rule": "keep_last",
+      "frame_id_source": "configuration"
     },
     {
       "id": "right_arm_controller_controller_state",
       "component": "right_arm",
       "topic": "/right_arm_controller/controller_state",
       "type": "control_msgs/msg/JointTrajectoryControllerState",
-      "frame_id": "",
+      "frame_id": "base_link",
       "clock_domain": "ros.sim_time",
       "timestamp_source": "header",
-      "equal_timestamp_rule": "keep_last"
+      "equal_timestamp_rule": "keep_last",
+      "frame_id_source": "configuration"
     },
     {
       "id": "joint_states",
       "component": "lift",
       "topic": "/joint_states",
       "type": "sensor_msgs/msg/JointState",
-      "frame_id": "",
+      "frame_id": "base_link",
       "clock_domain": "ros.sim_time",
       "timestamp_source": "header",
-      "equal_timestamp_rule": "keep_last"
+      "equal_timestamp_rule": "keep_last",
+      "frame_id_source": "configuration"
     },
     {
       "id": "sil_lift_command",
       "component": "lift",
       "topic": "/sil/lift/command",
       "type": "std_msgs/msg/Int8",
-      "frame_id": "",
+      "frame_id": "base_link",
       "clock_domain": "ros.sim_time",
       "timestamp_source": "bag",
       "frame_id_source": "configuration",
@@ -132,7 +136,7 @@
       "component": "base",
       "topic": "/cmd_vel",
       "type": "geometry_msgs/msg/Twist",
-      "frame_id": "",
+      "frame_id": "base_link",
       "clock_domain": "ros.sim_time",
       "timestamp_source": "bag",
       "frame_id_source": "configuration",
@@ -708,5 +712,16 @@
   "timestamp_rule": {
     "rule": "keep_last on every non-camera stream; cameras keep strict refusal",
     "measured_in": "run 44448676604 (measurement run 44465407013): equal header stamps /arm/joint_states 122 of 53209, left/right controller_state 117/94; equal receipt times /cmd_vel 1288 of 2952; cameras, /joint_states, /odom, gripper command none"
+  },
+  "frame_rule": {
+    "rule": "streams whose recorded header frame_id is empty, or that have no header, take base_link from configuration (frame_id_source: configuration)",
+    "streams": [
+      "left_arm_controller_controller_state",
+      "build1_capture_gripper_command",
+      "right_arm_controller_controller_state",
+      "joint_states",
+      "sil_lift_command",
+      "cmd_vel"
+    ]
   }
 }

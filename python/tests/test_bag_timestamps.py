@@ -202,3 +202,29 @@ def test_the_proposed_baseline1_profile_is_bound_and_not_registered():
         assert profile_id not in APPROVED_CAPTURE_PROFILES
         with pytest.raises(ConversionError, match="Unapproved profile"):
             validate_profile(capture)
+
+
+def test_an_empty_header_frame_takes_the_declared_configuration_frame(tmp_path):
+    """JointState from /build1/capture/gripper_command and the controller states
+    carry an empty frame_id in run 44448676604. Here the recorded /arm/joint_states
+    rows are written with their frame emptied, to exercise that case."""
+    data = recorded()
+    for window in data["/arm/joint_states"]["windows"]:
+        for row in window["rows"]:
+            row["frame_id"] = ""
+    bag = write(tmp_path / "bag", data)
+    capture = profile("keep_last")
+    capture["streams"][0]["frame_id"] = "base_link"
+    with pytest.raises(ConversionError, match="frame ID mismatch"):
+        read_bag(bag, capture)
+    capture["streams"][0]["frame_id_source"] = "configuration"
+    assert read_bag(bag, capture)["arm_joint_states"]
+
+
+def test_a_non_empty_header_frame_must_still_match_the_configuration(tmp_path):
+    bag = write(tmp_path / "bag", recorded())
+    capture = profile("keep_last")
+    capture["streams"][0]["frame_id"] = "some_other_frame"
+    capture["streams"][0]["frame_id_source"] = "configuration"
+    with pytest.raises(ConversionError, match="frame ID mismatch"):
+        read_bag(bag, capture)

@@ -90,6 +90,11 @@ Baseline 1), so two messages can share one: measured in openamr-upperbody-sw run
 `/cmd_vel` 1288 equal receipt times in 2952. The rule is part of the reviewed
 capture contract (streams are hashed); cameras keep strict refusal.
 
+Empty header frames (Proposed, 19 Nov 2026). A header-stamped message whose
+`frame_id` is empty (JointState, controller states) takes the stream's declared
+`frame_id` when the stream sets `frame_id_source: configuration`; a non-empty
+header frame must still equal the declared frame.
+
 Proposed canonical whole-body names/ranges live in interfaces PR #39. A lift
 profile must bind that component artifact by exact SHA256; state/action mapping
 must match it. Moving lift source samples (including samples between export-grid

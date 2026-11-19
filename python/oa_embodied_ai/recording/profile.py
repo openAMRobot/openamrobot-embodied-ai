@@ -16,7 +16,7 @@ APPROVED_CAPTURE_PROFILES = {}
 PROPOSED_CAPTURE_PROFILES = {
     "openamrobot-baseline1-gazebo-sim-oracle-v1": {
         "path": "configs/capture_profiles/proposed/openamrobot-baseline1-gazebo-sim-oracle-v1.json",
-        "sha256": "f63c36f18fd04354b0203695d467c8e6cc77549a572f32913921757194525ddf",
+        "sha256": "946554c5f3ec6f2793c510f25f56ccd9b7bd81be362c309a6e82bcf2729614f9",
         "status": "proposed",
         "evidence": "openamr-upperbody-sw run 44448676604 (Gazebo, sim-oracle); simulation only",
     },

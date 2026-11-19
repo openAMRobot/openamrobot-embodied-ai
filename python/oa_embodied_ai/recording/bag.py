@@ -63,7 +63,18 @@ def read_bag(path, profile, report=None):
                     raise ConversionError(
                         f"Stream '{stream['id']}' missing header/frame ID; explicit configuration source required"
                     )
-                if header is not None and header.frame_id != stream["frame_id"]:
+                # An empty header frame (JointState, controller states) takes the
+                # declared configuration frame; a non-empty one must still match.
+                configured = (
+                    header is not None
+                    and header.frame_id == ""
+                    and stream.get("frame_id_source") == "configuration"
+                )
+                if (
+                    header is not None
+                    and not configured
+                    and header.frame_id != stream["frame_id"]
+                ):
                     raise ConversionError(
                         f"Component '{stream['component']}' frame ID mismatch on '{conn.topic}'"
                     )
