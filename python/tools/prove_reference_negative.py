@@ -47,6 +47,8 @@ MUTATIONS = [
     ("calibration mismatch", REF,
      'if (content["height"], content["width"]) != (height, width) or content["frame_id"] != stream["frame_id"]:',
      "if False:", "test_camera_info_of_another_camera_is_refused"),
+    ("sidecar software order", REF, 'capture["provenance"]["software"].sort(key=lambda s: s["name"])', "pass",
+     "test_the_sidecar_does_not_depend_on_the_key_order_of_the_profile"),
     ("template hash", REF, "if ZERO_HASH in text:", "if False:", "test_a_template_hash_never_remains_in_the_sidecar"),
     ("recorded sidecar hashes", "oa_embodied_ai/conversion/native.py", "    if reference:\n", "    if False:\n",
      "test_the_sidecar_carries_recorded_hashes_not_template_values"),

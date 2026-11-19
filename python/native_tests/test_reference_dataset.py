@@ -9,6 +9,7 @@ Simulation evidence only.
 """
 
 import copy
+import hashlib
 import json
 import math
 import shutil
@@ -47,8 +48,10 @@ def bind(tmp_path, monkeypatch):
             "status": "proposed",
             "channels": [{k: c.get(k) for k in ("name", "component", "unit", "range")} for c in profile["state_channels"]],
         }
-        path = tmp_path / f"contract-{len(list(tmp_path.glob('contract-*')))}.json"
-        path.write_text(json.dumps(contract))
+        text = json.dumps(contract)
+        # one path per content: two conversions of one profile bind the same file
+        path = tmp_path / f"contract-{hashlib.sha256(text.encode()).hexdigest()[:16]}.json"
+        path.write_text(text)
         profile["component_contract"] = {"path": str(path), "sha256": file_sha256(path)}
         entry = dict(profiles.PROPOSED_CAPTURE_PROFILES[profile["profile_id"]],
                      sha256=profiles.capture_contract_digest(profile))
@@ -252,6 +255,18 @@ def test_camera_info_of_another_camera_is_refused(bind):
     profile["integrity"]["calibration_sources"]["left_wrist_camera_image"] = "/head_camera/rgbd/camera_info"
     with pytest.raises(IntegrityError, match="CALIBRATION_MISMATCH: /head_camera/rgbd/camera_info: 640x360"):
         prepare(FIXTURE, profile, bind(profile))
+
+
+def test_the_sidecar_does_not_depend_on_the_key_order_of_the_profile(bind):
+    from oa_embodied_ai.conversion.native import sidecar_for
+
+    profile = baseline1_slice()
+    episode = prepare(FIXTURE, profile, bind(profile))
+    first = sidecar_for(episode.profile, episode.frames, episode.template, reference=episode.reference_report)
+    stored = json.loads(json.dumps(episode.profile, sort_keys=True))  # as conversion.json keeps it
+    again = sidecar_for(stored, episode.frames, episode.template, reference=episode.reference_report)
+    assert list(stored["source_commits"]) != list(profile["source_commits"])
+    assert json.dumps(again, sort_keys=True) == json.dumps(first, sort_keys=True)
 
 
 def test_a_template_hash_never_remains_in_the_sidecar(bind):

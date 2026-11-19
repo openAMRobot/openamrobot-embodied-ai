@@ -556,6 +556,9 @@ def fill_sidecar(sidecar, profile, report):
         }
     for name, kind in (("robot_state", "state"), ("action", "action")):
         capture["streams"][name]["configuration_hash"] = "sha256:" + _json_sha256(profile[kind + "_channels"])
+    # independent of the source_commits key order, so a regeneration from the
+    # (sorted-key) manifest gives the same sidecar
+    capture["provenance"]["software"].sort(key=lambda s: s["name"])
     model = profile["integrity"]["robot_model"]
     if model.get("sha256"):
         capture["provenance"]["robot_configuration_hash"] = "sha256:" + model["sha256"]
