@@ -208,8 +208,11 @@ def test_the_proposed_baseline1_profile_is_bound_and_not_registered():
         assert capture["status"] == entry["status"] == "proposed"
         assert capture_contract_digest(capture) == entry["sha256"]
         assert profile_id not in APPROVED_CAPTURE_PROFILES
-        with pytest.raises(ConversionError, match="Unapproved profile"):
+        with pytest.raises(ConversionError, match="enable it explicitly"):
             validate_profile(capture)
+        # its Proposed rules enabled, it is still not an approved profile
+        with pytest.raises(ConversionError, match="Unapproved profile"):
+            validate_profile(capture, enabled=capture.get("proposed_rules", []))
 
 
 def test_an_empty_header_frame_takes_the_declared_configuration_frame(tmp_path):

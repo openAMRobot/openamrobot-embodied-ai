@@ -40,6 +40,7 @@ def sidecar_for(profile, frames, template, *, episode_index=0, task_index=0):
         fps=profile["fps"],
         task={"task_index": task_index, "instruction": profile["task"]},
     )
+    semantics = "command_semantics" in profile.get("proposed_rules", [])
     for kind, key in [("state", "observation.state"), ("action", "action")]:
         channels = profile[kind + "_channels"]
         native["features"][key] = {
@@ -52,12 +53,43 @@ def sidecar_for(profile, frames, template, *, episode_index=0, task_index=0):
                     "unit": c["unit"],
                     "meaning": "measured state"
                     if kind == "state"
-                    else "requested command",
+                    else "requested command"
+                    + (f" ({c['semantics']})" if semantics else ""),
                 }
                 for c in channels
             ],
         }
-    start, end = frames[0]["time_ns"], frames[-1]["time_ns"]
+    if semantics:
+        # Proposed command_semantics: what action[t] and observation[t] are, as the
+        # converter selects them (align): stated, not taken from the template.
+        sidecar["openamrobot"]["action_semantics"] = {
+            "values": "requested_pre_clip",
+            "timestamp": "command_issued",
+            "observation_relationship": (
+                "action[t] is the latest requested command issued at or before frame time t "
+                "(held between messages where declared); observation[t] holds the measured samples "
+                f"nearest t within {profile['max_skew_ns']} ns"
+            ),
+            "capture_provenance": "recorded command topics per action channel: "
+            + ", ".join(
+                f"{c['name']} {c['semantics']}" for c in profile["action_channels"]
+            ),
+        }
+    # Proposed episode_origin: the origin is the declared grid origin, and the
+    # recording interval covers every timestamp the frames reference.
+    start = frames[0].get("episode_origin_ns", frames[0]["time_ns"])
+    end = frames[-1]["time_ns"]
+    if "episode_origin_ns" in frames[0]:
+        end = max(
+            [end]
+            + [
+                t
+                for f in frames
+                for sample in f["selected"].values()
+                for t in (sample.time_ns, sample.receipt_ns)
+                if t is not None
+            ]
+        )
     stream_map = {}
     for stream in profile["streams"]:
         if stream.get("camera_key"):
@@ -76,18 +108,38 @@ def sidecar_for(profile, frames, template, *, episode_index=0, task_index=0):
             )
             capture["streams"][name]["physical_id"] = stream["id"]
             capture["streams"][name]["calibration"]["id"] = stream["calibration_id"]
-            stream_map[name] = stream
+            stream_map[name] = [stream]
+    segments = profile.get("vector_segments", {})
     for kind, name in [("state", "robot_state"), ("action", "action")]:
         source_ids = {c["stream"] for c in profile[kind + "_channels"]}
-        if len(source_ids) != 1:
+        if len(source_ids) != 1 and kind not in segments:
             raise ConversionError(
                 f"C9 v1 {kind} stream needs one acquisition source; multi-source aggregation requires a reviewed adapter"
             )
-        stream_map[name] = next(s for s in profile["streams"] if s["id"] in source_ids)
+        # Proposed vector_segments: the C9 v1 entry describes the composed
+        # vector; its per-frame time is the earliest selected segment sample.
+        order = list(dict.fromkeys(s["stream"] for s in segments.get(kind, []))) or sorted(source_ids)
+        stream_map[name] = [next(s for s in profile["streams"] if s["id"] == i) for i in order]
+
+    def composite(streams, frame):
+        """(source_frame_id, device_raw or None, host_raw) of the frame's recorded
+        selections; held stand-ins (no recorded message) carry no time."""
+        picked = [(s, frame["selected"][s["id"]]) for s in streams]
+        recorded = [(s, x) for s, x in picked if x.time_ns is not None]
+        if not recorded:
+            raise ConversionError(
+                "A sidecar stream needs at least one recorded sample per frame"
+            )
+        frame_id = "|".join(f"{s['id']}:{x.time_ns}" for s, x in recorded)
+        header = all(s["timestamp_source"] == "header" for s in streams)
+        device = min(x.time_ns for _, x in recorded) if header else None
+        return frame_id, device, min(x.receipt_ns for _, x in recorded)
+
     capture["samples"] = []
-    for name, stream in stream_map.items():
-        first = frames[0]["selected"][stream["id"]]
-        last = frames[-1]["selected"][stream["id"]]
+    selections = {name: [composite(streams, f) for f in frames] for name, streams in stream_map.items()}
+    for name, streams in stream_map.items():
+        header = all(s["timestamp_source"] == "header" for s in streams)
+        rows = selections[name]
         mapping = lambda lo, hi: {
             "status": "valid",
             "method": "explicit same-domain ROS nanoseconds minus episode origin",
@@ -97,27 +149,30 @@ def sidecar_for(profile, frames, template, *, episode_index=0, task_index=0):
             "validity": {"source_start": lo, "source_end": hi},
         }
         timestamps = {
-            "capture_source": "device"
-            if stream["timestamp_source"] == "header"
-            else "host_receipt",
+            "capture_source": "device" if header else "host_receipt",
             "host_receipt": {
-                "clock_domain": stream["clock_domain"],
+                "clock_domain": streams[0]["clock_domain"],
                 "raw_unit": "ns",
-                "mapping_to_authoritative": mapping(first.receipt_ns, last.receipt_ns),
+                "mapping_to_authoritative": mapping(
+                    min(r[2] for r in rows), max(r[2] for r in rows)
+                ),
             },
             "device": {
                 "availability": "unavailable",
                 "reason": "No acquisition header in source",
             },
         }
-        if stream["timestamp_source"] == "header":
+        if header:
             timestamps["device"] = {
                 "availability": "available",
-                "clock_domain": stream["clock_domain"],
+                "clock_domain": streams[0]["clock_domain"],
                 "raw_unit": "ns",
-                "mapping_to_authoritative": mapping(first.time_ns, last.time_ns),
+                "mapping_to_authoritative": mapping(
+                    min(r[1] for r in rows), max(r[1] for r in rows)
+                ),
             }
         capture["streams"][name]["timestamps"] = timestamps
+    sequence = {name: (-1, None) for name in stream_map}
     for i, frame in enumerate(frames):
         row = {
             "episode_index": episode_index,
@@ -126,37 +181,41 @@ def sidecar_for(profile, frames, template, *, episode_index=0, task_index=0):
             "authoritative_timestamp_ns": frame["time_ns"] - start,
             "streams": {},
         }
-        for name, stream in stream_map.items():
-            sample = frame["selected"][stream["id"]]
-            selected = sample.time_ns - start
-            if min(selected, sample.receipt_ns - start) < 0:
+        for name, streams in stream_map.items():
+            frame_id, device, host = selections[name][i]
+            header = device is not None
+            selected = (device if header else host) - start
+            if min(selected, host - start) < 0:
                 raise ConversionError(
                     "Selected frame/receipt precedes episode origin; explicit timebase adapter required"
                 )
+            # A sample selected again keeps its sequence ID and is not fresh.
+            previous_id, previous_frame = sequence[name]
+            reused = frame_id == previous_frame
+            sequence_id = previous_id if reused else previous_id + 1
+            sequence[name] = (sequence_id, frame_id)
             row["streams"][name] = {
-                "sequence_id": i,
-                "source_frame_id": f"{stream['id']}:{sample.time_ns}",
-                "health": "fresh",
-                "selection_timestamp_source": "device"
-                if stream["timestamp_source"] == "header"
-                else "host_receipt",
+                "sequence_id": sequence_id,
+                "source_frame_id": frame_id,
+                "health": "stale" if reused else "fresh",
+                "selection_timestamp_source": "device" if header else "host_receipt",
                 "selected_timestamp_ns": selected,
                 "host_receipt": {
                     "status": "valid",
-                    "raw": sample.receipt_ns,
-                    "mapped_authoritative_ns": sample.receipt_ns - start,
+                    "raw": host,
+                    "mapped_authoritative_ns": host - start,
                 },
                 "device_timestamp": {
                     "status": "valid",
-                    "raw": sample.time_ns,
+                    "raw": device,
                     "mapped_authoritative_ns": selected,
                 }
-                if stream["timestamp_source"] == "header"
+                if header
                 else {
                     "status": "unavailable",
                     "reason": "No acquisition header in source",
                 },
-                "measured_skew_ns": abs(sample.time_ns - frame["time_ns"]),
+                "measured_skew_ns": abs(selected + start - frame["time_ns"]),
             }
         capture["samples"].append(row)
     capture["synchronization"] = {
@@ -164,7 +223,7 @@ def sidecar_for(profile, frames, template, *, episode_index=0, task_index=0):
         "tolerance_ns": profile["max_skew_ns"],
         "basis": profile["profile_id"] + "; owner acceptance not inferred",
     }
-    capture["timebase"]["clock_domain"] = next(iter(stream_map.values()))[
+    capture["timebase"]["clock_domain"] = next(iter(stream_map.values()))[0][
         "clock_domain"
     ]
     capture["events"] = []
@@ -201,6 +260,9 @@ class ConversionEpisode:
     source_bag: Path
     source_sha256: dict
     timestamp_report: dict = field(default_factory=dict)
+    enabled: tuple = ()
+    alignment_report: dict = field(default_factory=dict)
+    lift_phase_report: dict = field(default_factory=dict)
 
 
 def _features(episode):
@@ -251,8 +313,12 @@ def validate_collection(episodes, output):
         if not episode.frames:
             raise ConversionError(f"Cannot export an empty episode at index {index}")
         validate_profile(
-            episode.profile, development=episode.profile.get("origin") == "synthetic"
+            episode.profile,
+            development=episode.profile.get("origin") == "synthetic",
+            enabled=episode.enabled,
         )
+        if episode.enabled != episodes[0].enabled:
+            raise ConversionError(f"Episode {index} enables different Proposed rules")
         for key in ("dataset_id", "dataset_revision", "origin"):
             if episode.profile[key] != profile[key]:
                 raise ConversionError(f"Episode {index} has incompatible {key}")
@@ -371,11 +437,21 @@ def export_native_episodes(episodes, output):
                 "profile": e.profile,
                 "source_bag_sha256": e.source_sha256,
                 "stream_timestamps": e.timestamp_report,
+                "alignment": e.alignment_report,
+                "lift_phase": e.lift_phase_report,
             }
             for i, e in enumerate(episodes)
         ]
+        from oa_embodied_ai.recording.profile import APPROVED_CAPTURE_PROFILES
+
         manifest = {
             "origin": profile["origin"],
+            "profile_status": profile.get("status"),
+            "profile_registered": profile["profile_id"] in APPROVED_CAPTURE_PROFILES,
+            "proposed_rules_enabled": list(episodes[0].enabled),
+            "proposed_rules_note": "Proposed rules are not approved by the owners; a dataset that depends on them is development evidence only"
+            if episodes[0].enabled
+            else None,
             "profile": profile,
             "execution": execution_provenance(),
             "episodes": records,

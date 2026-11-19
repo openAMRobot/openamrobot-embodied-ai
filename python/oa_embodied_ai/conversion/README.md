@@ -95,6 +95,49 @@ Empty header frames (Proposed, 19 Nov 2026). A header-stamped message whose
 `frame_id` when the stream sets `frame_id_source: configuration`; a non-empty
 header frame must still equal the declared frame.
 
+Proposed conversion rules (19 Nov 2026, none approved). A profile lists the
+rules it relies on in `proposed_rules` (hashed with the capture contract) and the
+caller enables each by name: `oa-convert-bag ... --enable-proposed RULE`. A
+declared rule that is not enabled, or a declaration whose rule is not listed,
+refuses; without declarations nothing changes. The conversion manifest records
+`proposed_rules_enabled` and states that the dataset is development evidence.
+
+| Rule | Declaration | Behaviour |
+| --- | --- | --- |
+| `episode_origin` | `episode_origin: first_complete_grid` | Grid times are multiples of 1/fps in the clock domain; the origin is the first grid time at or after the latest first sample of the required streams. Leading frames that select a sample (time or receipt) before it are dropped and counted (`alignment.episode_origin`); the recording interval covers every referenced timestamp. |
+| `command_semantics` | `semantics` per action channel | Actions are commanded values (`controller_reference`, `held_gripper_goal`, `lift_stop_target`, `requested_velocity`), states measured, from disjoint streams. The sidecar states the relationship: action[t] is the latest request at or before t, observation[t] the measured samples nearest t. |
+| `controller_reference` | `names_field: joint_names`, `field: reference.positions` | Arm commands read from `JointTrajectoryControllerState.reference` as recorded; no new publisher. |
+| `vector_segments` | `vector_segments.state/action`: ordered `{stream, names}` | A vector from several streams. The single-source check stays for undeclared vectors; the C9 v1 entry describes the composed vector, its per-frame time is the earliest selected segment sample and its source frame ID names every segment sample. |
+| `stop_index` | `source_unit: stop_index`, `stop_targets` | An integer stop index maps to its declared target (`L1000/L1175/L1350` to 0.0/0.175/0.350 m from the decisions register ARM-MOUNT and CONFIG-IDS); other indices refuse. |
+| `range_tolerance` | `range_tolerance` per ranged channel | A value outside its range by at most the tolerance is kept unchanged (never clamped) and counted per channel (`alignment.range_tolerance_flags`). |
+| `held_command` | stream `hold: {rule: until_next or while_zero, before_first}` | A command holds its last message beyond `max_skew_ns`: always (`until_next`) or only while every commanded value is zero (`while_zero`). `before_first` is the value before the first message, checked against the first measured state. Held streams do not bound the episode; held frames are counted. |
+| `lift_positioning_from_command` | `phase_evidence.lift_positioning` | lift_positioning intervals from each lift command to arrival (or the next command). |
+| `lift_phase_report` | `phase_evidence.on_missing_evidence: report` | Missing lift-phase evidence is written to the manifest (`lift_phase`, status NOT_VERIFIED) instead of refusing. A stowed-pose review object needs `status: reviewed` and an `approval_ref`; a placeholder never passes. |
+
+`--enable-proposed proposed_capture_profile` (caller only) converts a profile listed
+in `PROPOSED_CAPTURE_PROFILES` when its contract digest matches, with its bound
+Proposed C9 component contract; the manifest records `profile_registered: false`.
+
+Registration of the Baseline 1 profile (for the embodied-AI owner and the
+software lead). The exact entry for the current contract digest is:
+
+```python
+APPROVED_CAPTURE_PROFILES = {
+    "openamrobot-baseline1-gazebo-sim-oracle-v1": {
+        "sha256": "b3cff03ca2bf2f7236e0cec984f5fee039e9e086e0a9524d6f23716e0e44ceac",
+        "approval_ref": "<owner approval reference>",
+    },
+}
+```
+
+with `"status": "accepted"` and the same `approval_ref` in the profile (neither
+field is part of the digest). The profile carries its provenance: run id, run head
+SHA, source commits, simulator and physics versions, model hash, seed, acceptance
+profile `sim-oracle`, pose sources `ground_truth`. While its rules stay Proposed,
+conversion still needs `--enable-proposed`; a rule decision changes the profile
+and so its digest. Actual-data export also needs the C9 component contract
+(interfaces #39) accepted.
+
 Proposed canonical whole-body names/ranges live in interfaces PR #39. A lift
 profile must bind that component artifact by exact SHA256; state/action mapping
 must match it. Moving lift source samples (including samples between export-grid

@@ -11,21 +11,30 @@ from oa_embodied_ai.recording.profile import validate_profile
 from oa_embodied_ai.training.inputs import inventory
 
 
-def prepare_episode(bag, profile, template, *, development=False):
-    profile = validate_profile(profile, development=development)
+def prepare_episode(bag, profile, template, *, development=False, enabled=()):
+    enabled = tuple(sorted(enabled))
+    profile = validate_profile(profile, development=development, enabled=enabled)
     source_hashes = inventory(bag)
-    timestamps = {}
+    timestamps, alignment, lift_phase = {}, {}, {}
     data = read_bag(bag, profile, report=timestamps)
-    validate_recording_phases(data, profile)
-    frames = align(data, profile)
+    validate_recording_phases(data, profile, report=lift_phase)
+    frames = align(data, profile, report=alignment)
     if inventory(bag) != source_hashes:
         raise ConversionError("Source bag artifacts changed during capture validation")
     return ConversionEpisode(
-        frames, profile, template, Path(bag), source_hashes, timestamps
+        frames,
+        profile,
+        template,
+        Path(bag),
+        source_hashes,
+        timestamps,
+        enabled,
+        alignment,
+        lift_phase,
     )
 
 
-def convert_collection(path, output, *, development=False, validate_only=False):
+def convert_collection(path, output, *, development=False, validate_only=False, enabled=()):
     """Manifest paths resolve relative to the manifest, independent of shell cwd."""
     path = Path(path).resolve(strict=True)
     collection = load_data(path)
@@ -60,6 +69,7 @@ def convert_collection(path, output, *, development=False, validate_only=False):
                 load_data(resolved["profile"]),
                 load_data(resolved["sidecar_template"]),
                 development=development,
+                enabled=enabled,
             )
         )
     # Export performs cross-episode checks before creating any output. For a
