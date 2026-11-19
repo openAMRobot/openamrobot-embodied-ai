@@ -19,7 +19,8 @@
     "range_tolerance",
     "held_command",
     "lift_positioning_from_command",
-    "lift_phase_report"
+    "lift_phase_report",
+    "reference_integrity"
   ],
   "episode_origin": "first_complete_grid",
   "units": "radians for every angular channel (decision #79; interfaces CCR #41); metres for the lift, the lift command as a declared stop target in metres (stop_index); m/s and rad/s for the base",
@@ -959,5 +960,34 @@
     "pose_tolerance_rad": 0.01,
     "pose_tolerance_source": "A7 named-pose final error TOLERANCE 0.01 rad (a7_support.py, simulation)",
     "on_missing_evidence": "report"
+  },
+  "integrity": {
+    "canonical_angular_unit": "rad",
+    "canonical_angular_velocity_unit": "rad/s",
+    "degrees": "only through an explicit LeRobot adapter outside the canonical dataset (founder decision 19 Nov 2026; interfaces CCR #41)",
+    "action_convention": "latest_at_or_before",
+    "camera_sync_max_skew_ns": 100000000,
+    "gripper": {
+      "unit": "rad",
+      "channels": {
+        "openarm_left_finger_joint1": {
+          "opening_sign": 1
+        },
+        "openarm_right_finger_joint1": {
+          "opening_sign": -1
+        }
+      },
+      "source": "finger joint position in radians, no gripper width; the right finger is mirrored: its range is [-0.7854, 0] against [0, 0.7854] for the left (Proposed C9 component contract, interfaces PR #39 head 43ec67747b10), and the recorded right finger command is negative (-0.0036 rad at 6.153 s, run 44448676604)"
+    },
+    "calibration_sources": {
+      "left_wrist_camera_image": "/left_wrist_camera/camera_info",
+      "right_wrist_camera_image": "/right_wrist_camera/camera_info",
+      "head_camera_rgbd_image": "/head_camera/rgbd/camera_info",
+      "base_camera_rgbd_image": "/base_camera/rgbd/camera_info"
+    },
+    "robot_model": {
+      "sha256": "e1a3c33d59f6c5628f1329c42fe04b67e11d1720db4a2f65e1dfae211885a2e2",
+      "source": "openamr-upperbody-sw run 44448676604, job 135306975778 log: Build 1 scene \"model_sha256\" (the run's /build1/run_info is not in the bag)"
+    }
   }
 }

@@ -16,7 +16,7 @@ APPROVED_CAPTURE_PROFILES = {}
 PROPOSED_CAPTURE_PROFILES = {
     "openamrobot-baseline1-gazebo-sim-oracle-v1": {
         "path": "configs/capture_profiles/proposed/openamrobot-baseline1-gazebo-sim-oracle-v1.json",
-        "sha256": "b3cff03ca2bf2f7236e0cec984f5fee039e9e086e0a9524d6f23716e0e44ceac",
+        "sha256": "aad2e9636cf2d06406199e568d5b69100139e1fc22b79240f44f72038f6ecbce",
         "status": "proposed",
         "evidence": "openamr-upperbody-sw run 44448676604 (Gazebo, sim-oracle); simulation only",
     },
@@ -40,11 +40,12 @@ PROPOSED_RULES = {
     "held_command": "a command stream holds its last value between messages (until_next, or while_zero)",
     "lift_positioning_from_command": "lift_positioning intervals from each lift command to arrival at its target",
     "lift_phase_report": "lift-phase evidence recorded in the manifest instead of refusing",
+    "reference_integrity": "declared integrity checks (units, timestamp reconciliation, action convention, camera sync, gripper sign, calibration hashes) refuse with a named code; the manifest binds bag, configuration and output hashes for oa-verify-reference",
 }
 CALLER_RULES = {
     "proposed_capture_profile": "convert a Proposed (unregistered) capture profile and its Proposed C9 component contract, bound by digest",
 }
-DIGEST_OPTIONAL_FIELDS = ("proposed_rules", "episode_origin", "vector_segments")
+DIGEST_OPTIONAL_FIELDS = ("proposed_rules", "episode_origin", "vector_segments", "integrity")
 
 
 def check_proposed_rules(profile, enabled):
@@ -93,6 +94,12 @@ def check_declarations(profile):
     streams = {s["id"]: s for s in profile["streams"]}
     action_streams = {c["stream"] for c in profile["action_channels"]}
     state_streams = {c["stream"] for c in profile["state_channels"]}
+    if "integrity" in profile:
+        require_rule(profile, "reference_integrity", "integrity")
+    if uses(profile, "reference_integrity"):
+        from oa_embodied_ai.conversion.reference import check_declaration
+
+        check_declaration(profile)
     if "episode_origin" in profile:
         require_rule(profile, "episode_origin", "episode_origin")
         if profile["episode_origin"] != "first_complete_grid":

@@ -3,6 +3,7 @@
 
 from pathlib import Path
 
+from oa_embodied_ai.conversion import reference
 from oa_embodied_ai.conversion.native import ConversionEpisode, export_native_episodes
 from oa_embodied_ai.conversion.validation import ConversionError
 from oa_embodied_ai.dataset_qa.strict_io import load_data
@@ -17,8 +18,23 @@ def prepare_episode(bag, profile, template, *, development=False, enabled=()):
     source_hashes = inventory(bag)
     timestamps, alignment, lift_phase = {}, {}, {}
     data = read_bag(bag, profile, report=timestamps)
+    checked = reference.enabled(profile)
+    if checked:
+        # Proposed reference_integrity: sign and range of every source sample first
+        reference.check_source(data, profile)
     validate_recording_phases(data, profile, report=lift_phase)
-    frames = align(data, profile, report=alignment)
+    try:
+        frames = align(data, profile, report=alignment)
+    except ConversionError as exc:
+        named = reference.camera_missing(exc, profile) if checked else None
+        if named is not None:
+            raise named from exc
+        raise
+    report = (
+        reference.episode_report(bag, profile, data, frames, timestamps, alignment)
+        if checked
+        else {}
+    )
     if inventory(bag) != source_hashes:
         raise ConversionError("Source bag artifacts changed during capture validation")
     return ConversionEpisode(
@@ -31,6 +47,7 @@ def prepare_episode(bag, profile, template, *, development=False, enabled=()):
         enabled,
         alignment,
         lift_phase,
+        report,
     )
 
 

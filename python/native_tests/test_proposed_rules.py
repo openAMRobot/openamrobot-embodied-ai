@@ -104,7 +104,7 @@ def subset_profile():
     profile["streams"] = [s for s in full["streams"] if s.get("camera_key") or s["id"] in used]
     profile["state_names"] = [c["name"] for c in profile["state_channels"]]
     profile["action_names"] = [c["name"] for c in profile["action_channels"]]
-    for key in ("component_contract", "phase_evidence", "vector_segments", "episode_origin"):
+    for key in ("component_contract", "phase_evidence", "vector_segments", "episode_origin", "integrity"):
         profile.pop(key, None)
     profile["proposed_rules"] = []
     return profile

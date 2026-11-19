@@ -72,3 +72,16 @@ evidence. Defaults unchanged. Tests on messages recorded in run 44448676604
 declares these rules and its simulator provenance. None is approved; a dataset
 converted with them is development evidence. Stowed-pose evidence is not
 available: `park` is a placeholder and the recorded arms are not in it.
+
+19 November 2026 (continued): Proposed `reference_integrity` on the same draft:
+named integrity checks on the recorded messages (units and degrees, ranges with
+tolerance, lift metres, gripper opening signs with the mirrored right finger,
+read/kept/dropped counts against metadata.yaml, action[t] latest at or before t with
+one-frame shift detection, camera presence and skew against the grid, camera_info
+consistency, no template hash in the sidecar); recorded camera_info and model hashes
+in the C9 sidecar; `conversion.json` binds bag, configuration and output hashes; and
+`oa-verify-reference` recomputes the conversion from the bag. Tests on a 5 s slice of
+run 44448676604 (python/tests/fixtures/baseline1_slice, recorded bytes) with one
+positive and one negative per check; prove_reference_negative.py reverts each check.
+Proposed profile digest now aad2e963 (integrity block added). Nothing is approved;
+a dataset converted with these rules is development evidence, simulation only.

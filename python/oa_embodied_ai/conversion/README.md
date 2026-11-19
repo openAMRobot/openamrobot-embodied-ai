@@ -113,6 +113,7 @@ refuses; without declarations nothing changes. The conversion manifest records
 | `held_command` | stream `hold: {rule: until_next or while_zero, before_first}` | A command holds its last message beyond `max_skew_ns`: always (`until_next`) or only while every commanded value is zero (`while_zero`). `before_first` is the value before the first message, checked against the first measured state. Held streams do not bound the episode; held frames are counted. |
 | `lift_positioning_from_command` | `phase_evidence.lift_positioning` | lift_positioning intervals from each lift command to arrival (or the next command). |
 | `lift_phase_report` | `phase_evidence.on_missing_evidence: report` | Missing lift-phase evidence is written to the manifest (`lift_phase`, status NOT_VERIFIED) instead of refusing. A stowed-pose review object needs `status: reviewed` and an `approval_ref`; a placeholder never passes. |
+| `reference_integrity` | `integrity`: canonical units, `action_convention`, `camera_sync_max_skew_ns`, `gripper` opening signs, `calibration_sources`, `robot_model` | Checks on the recorded messages that refuse with a named code: `UNITS_DEGREES`, `UNITS`, `UNITS_RANGE` (says when a value fits degrees, millimetres or a stop index), `LIFT_UNIT`, `GRIPPER_SIGN`, `TIMESTAMP_RECONCILE` (read = kept + dropped = the bag's metadata.yaml count, consecutive grid), `ACTION_CONVENTION` (action[t] is the latest command at or before t; a one-frame shift is named), `CAMERA_MISSING`, `CAMERA_SYNC`, `CALIBRATION_MISMATCH`, `TEMPLATE_HASH`. The sidecar takes the recorded camera_info and model hashes; `conversion.json` gains `reference` (configuration hashes, sidecar template, output file hashes) and each episode a `reference` report (bag file hashes, metadata counts, recording run and commits, calibration, NOT_AVAILABLE items, check results). |
 
 `--enable-proposed proposed_capture_profile` (caller only) converts a profile listed
 in `PROPOSED_CAPTURE_PROFILES` when its contract digest matches, with its bound
@@ -124,7 +125,7 @@ software lead). The exact entry for the current contract digest is:
 ```python
 APPROVED_CAPTURE_PROFILES = {
     "openamrobot-baseline1-gazebo-sim-oracle-v1": {
-        "sha256": "b3cff03ca2bf2f7236e0cec984f5fee039e9e086e0a9524d6f23716e0e44ceac",
+        "sha256": "aad2e9636cf2d06406199e568d5b69100139e1fc22b79240f44f72038f6ecbce",
         "approval_ref": "<owner approval reference>",
     },
 }
@@ -211,3 +212,19 @@ The old decimal comparison is restored only in an isolated mutation proof and
 causes the expected regression failure. Source-sample validation also runs before
 resampling, so invalid joint values or corrupt camera messages between export-grid
 frames cannot disappear silently.
+
+### Verify a reference dataset (Proposed)
+
+`oa-verify-reference DATASET --bag BAG [--run-log LOG] [--require-clean-converter]`
+recomputes the conversion from the bag with the profile, rules and sidecar template
+recorded in `conversion.json` and refuses on the first difference:
+`TAMPERED_OUTPUT` (a file differs from `reference.output_sha256`), `SOURCE_MISMATCH`
+(bag files), `MANIFEST_MISMATCH` (an episode report), `SIDECAR_MISMATCH`,
+`STATE_MISMATCH`, `ACTION_SHIFTED` / `ACTION_MISMATCH` (stored float32 actions against
+the recomputed ones), `TIMESTAMP_MISMATCH`, `VIDEO_FRAMES` (decoded frame counts) and,
+with `--run-log`, `ROBOT_MODEL` (the model hash must appear in the recording run log).
+Video pixels are not compared with the bag. A PASS is development evidence only.
+The test fixture `python/tests/fixtures/baseline1_slice` is a 5 s slice of run
+44448676604 cut with `python/tools/cut_bag_slice.py` (bytes unchanged; provenance in
+`baseline1_slice_provenance.json`); `python/tools/prove_reference_negative.py`
+reverts each check in a source copy and requires its test to fail.

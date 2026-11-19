@@ -35,7 +35,7 @@ def _dump(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n")
 
 
-def sidecar_for(profile, frames, template, *, episode_index=0, task_index=0):
+def sidecar_for(profile, frames, template, *, episode_index=0, task_index=0, reference=None):
     schema, _ = load_c9_schema()
     Draft202012Validator(schema).validate(template)
     sidecar = copy.deepcopy(template)
@@ -255,6 +255,11 @@ def sidecar_for(profile, frames, template, *, episode_index=0, task_index=0):
         for key, value in profile["source_commits"].items()
     ]
     capture["provenance"]["lerobot_compatibility"]["validated_release_pin"] = None
+    if reference:
+        # Proposed reference_integrity: recorded calibration and configuration hashes
+        from oa_embodied_ai.conversion.reference import fill_sidecar
+
+        fill_sidecar(sidecar, profile, reference)
     Draft202012Validator(schema).validate(sidecar)
     return sidecar
 
@@ -272,6 +277,7 @@ class ConversionEpisode:
     enabled: tuple = ()
     alignment_report: dict = field(default_factory=dict)
     lift_phase_report: dict = field(default_factory=dict)
+    reference_report: dict = field(default_factory=dict)
 
 
 def _features(episode):
@@ -361,6 +367,7 @@ def validate_collection(episodes, output):
                 episode.template,
                 episode_index=index,
                 task_index=tasks.index(task),
+                reference=episode.reference_report,
             )
         )
         for frame in episode.frames:
@@ -448,6 +455,7 @@ def export_native_episodes(episodes, output):
                 "stream_timestamps": e.timestamp_report,
                 "alignment": e.alignment_report,
                 "lift_phase": e.lift_phase_report,
+                **({"reference": e.reference_report} if e.reference_report else {}),
             }
             for i, e in enumerate(episodes)
         ]
@@ -510,6 +518,15 @@ def export_native_episodes(episodes, output):
             "frames_loaded": len(loaded),
             "status": "PASS",
         }
+        if episodes[0].reference_report:
+            # Proposed reference_integrity: bind every written file; conversion.json last
+            from oa_embodied_ai.conversion import reference
+            from oa_embodied_ai.training.inputs import json_sha256
+
+            manifest["reference"] = reference.conversion_reference(
+                episodes, [json_sha256(e.template) for e in episodes]
+            )
+            manifest["reference"]["output_sha256"] = reference.output_hashes(root)
         _dump(root / "meta/openamrobot/conversion.json", manifest)
         for episode in episodes:
             if inventory(episode.source_bag) != episode.source_sha256:
