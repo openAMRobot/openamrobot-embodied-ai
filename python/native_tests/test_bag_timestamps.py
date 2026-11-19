@@ -11,14 +11,22 @@ with read_bag. Simulation evidence only.
 
 import copy
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
 from oa_embodied_ai.conversion.validation import ConversionError
 from oa_embodied_ai.recording.bag import read_bag
 from oa_embodied_ai.recording.profile import validate_profile
 
-FIXTURE = Path(__file__).parent / "fixtures" / "baseline1_run44448676604_stamps.json"
+FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "tests"
+    / "fixtures"
+    / "baseline1_run44448676604_stamps.json"
+)
 
 
 def recorded():
@@ -193,7 +201,7 @@ def test_the_proposed_baseline1_profile_is_bound_and_not_registered():
         capture_contract_digest,
     )
 
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[2]  # repository root
     for profile_id, entry in PROPOSED_CAPTURE_PROFILES.items():
         capture = json.loads((root / entry["path"]).read_text())
         assert capture["profile_id"] == profile_id
