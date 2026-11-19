@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import importlib.metadata
 import json
+import struct
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,6 +20,14 @@ from oa_embodied_ai.training.evidence import execution_provenance
 from oa_embodied_ai.training.inputs import inventory
 
 LEROBOT_VERSION = "0.6.1"  # inspected development pin; not project release acceptance
+
+
+def native_timestamp_matches(value, frame_index, fps):
+    """LeRobot stores the frame timestamp as float32: compare with the exact grid
+    time or its float32 value, as C10 does (C10_TIME_ORDER). A fixed 1e-6 s
+    tolerance fails from about 64 s on, where one float32 step exceeds it."""
+    grid = frame_index / fps
+    return value in (grid, struct.unpack("f", struct.pack("f", grid))[0])
 
 
 def _dump(path, value):
@@ -483,8 +492,9 @@ def export_native_episodes(episodes, output):
                     or int(row["frame_index"]) != frame_index
                     or int(row["index"]) != global_index
                     or int(row["task_index"]) != tasks.index(episode.profile["task"])
-                    or abs(float(row["timestamp"]) - frame_index / profile["fps"])
-                    > 1e-6
+                    or not native_timestamp_matches(
+                        float(row["timestamp"]), frame_index, profile["fps"]
+                    )
                 ):
                     raise ConversionError(
                         "Native LeRobot episode/frame/task/timestamp binding mismatch"

@@ -504,3 +504,19 @@ def test_lift_phase_evidence_is_reported_from_the_recorded_commands():
     late = {}
     validate_recording_phases(phase_data(4), phase_profile(), report=late)  # 115.7 s to 116.0 s: 0.2 mm, no command
     assert late["in_lift_positioning"] == 0 and late["moving_outside_lift_positioning"]
+
+
+# Native loader binding on long episodes -------------------------------------------------------------------------------
+
+def test_the_native_timestamp_check_holds_past_64_seconds():
+    """Run 44448676604 converts to 543 frames at 5 fps; LeRobot returns frame 341 at float32(68.2) s."""
+    import struct
+
+    from oa_embodied_ai.conversion import native
+
+    stored = struct.unpack("f", struct.pack("f", 341 / 5))[0]
+    assert abs(stored - 341 / 5) > 1e-6  # the earlier fixed tolerance refused this frame
+    assert native.native_timestamp_matches(stored, 341, 5)
+    assert native.native_timestamp_matches(0.2, 1, 5)
+    next_up = struct.unpack("f", struct.pack("I", struct.unpack("I", struct.pack("f", stored))[0] + 1))[0]
+    assert not native.native_timestamp_matches(next_up, 341, 5)
