@@ -16,6 +16,7 @@ datasets/*
 rosbag2_*/
 *.db3
 *.mcap
+!python/tests/fixtures/baseline1_slice/*.mcap
 *.mp4
 
 # Model weights, checkpoints, hashes, reports, and run outputs
