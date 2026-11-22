@@ -78,8 +78,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Check out canonical C9 test assets
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.INTERFACES_REPOSITORY }}
+          ref: ${{ env.INTERFACES_COMMIT }}
+          path: external/openamrobot-interfaces
+          persist-credentials: false
+
       - name: Install
-        run: pip install -e "python[test]"
+        run: python -m pip install -e "python[test]"
 
       - name: Test
-        run: pytest python/tests -v
+        run: python -m pytest python/tests -v
