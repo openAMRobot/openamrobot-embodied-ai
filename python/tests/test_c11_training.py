@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 import torch
+import yaml
 from oa_embodied_ai.dataset_qa.contract import c9_asset
 from oa_embodied_ai.dataset_qa.strict_io import load_data
 from oa_embodied_ai.training.cli import train_act
@@ -49,6 +50,14 @@ def test_c9_profile_names_units_and_order_are_exact():
     assert all(
         "lift_joint" != name for name in cfg.channel_names + historical.channel_names
     )
+
+
+@pytest.mark.parametrize(
+    "profile", ["bi-openarm-position", "openamrobot-mobile-lift-qpos-v1-proposed"]
+)
+def test_unversioned_alias_and_distinct_full_body_profile_are_rejected(profile):
+    with pytest.raises(ValueError, match="Unknown kinematic profile"):
+        get_profile_config(profile)
 
 
 @pytest.mark.parametrize(
@@ -96,12 +105,14 @@ def test_shared_native_files_use_episode_rows_and_video_segments(
     assert sample["images"].shape == (4, 3, 32, 32)
     assert sample["actions"].shape == (3, 16)
     assert sample["action_mask"].tolist() == [True, True, False]
+    assert sample["actions"][:, 0].tolist() == [1.0, 2.0, 0.0]
     assert sample["actions"][2].eq(0).all()
     assert [
         dataset.samples[2]["video_map"][k][1][0] for k in tiny_config.camera_keys
     ] == [2] * 4
     assert not torch.equal(sample["images"][0], sample["images"][1])
     assert dataset[3]["action_mask"].tolist() == [True, False, False]
+    assert dataset[3]["actions"][:, 0].tolist() == [2.0, 0.0, 0.0]
     assert dataset.samples[2]["episode_index"] == 1
 
 
@@ -258,10 +269,18 @@ def test_real_native_failures_block_before_model_even_with_override(
     assert not (tmp_path / "run/c11_training_summary.json").exists()
 
 
+@pytest.mark.parametrize("use_yaml", [False, True])
 def test_bounded_cpu_training_and_honest_checkpoint(
-    synthetic_inputs, tiny_config, tmp_path
+    synthetic_inputs, tiny_config, tmp_path, use_yaml
 ):
     root, policy, manifest = synthetic_inputs
+    if use_yaml:
+        policy_values = load_data(policy)
+        manifest_values = load_data(manifest)
+        policy, manifest = policy.with_suffix(".yaml"), manifest.with_suffix(".yml")
+        policy.write_text(yaml.safe_dump(policy_values))
+        manifest_values["policy_sha256"] = file_sha256(policy)
+        manifest.write_text(yaml.safe_dump(manifest_values))
     summary = train_act(
         root,
         tiny_config,

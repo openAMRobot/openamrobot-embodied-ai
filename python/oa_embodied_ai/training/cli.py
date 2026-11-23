@@ -67,6 +67,7 @@ def train_act(
     with bound_snapshot(dataset_path, input_manifest_path, policy_path) as (
         snapshot,
         policy_copy,
+        manifest_copy,
     ):
         summary = _train_snapshot(
             snapshot,
@@ -75,7 +76,7 @@ def train_act(
             output_dir,
             smoke_test,
             allow_synthetic_eval,
-            input_manifest_path,
+            manifest_copy,
             policy_copy,
             dataset_path,
             policy_path,

@@ -88,6 +88,9 @@ def check_episode(sidecar, native, policy, emit):
                         "format_version": info.get("codebase_version"),
                         "episode_id": episode.get("episode_id"),
                         "episode_index": episode.get("episode_index"), "length": episode.get("length")}
+    if "repo_id" in info and "dataset_id" in info and info["dataset_id"] != info["repo_id"]:
+        check("C10_BINDING", False, {"repo_id": info["repo_id"], "dataset_id": info["dataset_id"]},
+              {"dataset_id": binding["dataset_id"]})
     identity = policy.get("native_identity", {})
     if approved and isinstance(identity, dict) and identity.get("evidence"):
         for key in ("dataset_id", "dataset_revision"):

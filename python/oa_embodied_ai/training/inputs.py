@@ -13,6 +13,8 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
+import yaml
+
 from ..dataset_qa.strict_io import load_data
 
 
@@ -95,7 +97,7 @@ def assert_unchanged(root, manifest, policy_path):
 
 @contextmanager
 def bound_snapshot(dataset_path, input_manifest_path, policy_path):
-    """Train from a private byte-verified copy; original input may not mutate.
+    """Use private byte-verified copies of the dataset, manifest and policy.
 
     Protects normal concurrent edits. Storage authenticity/hostile same-user
     mutation still requires externally controlled immutable storage.
@@ -105,23 +107,36 @@ def bound_snapshot(dataset_path, input_manifest_path, policy_path):
     try:
         if input_manifest_path is None or policy_path is None:
             raise ValueError("Explicit input manifest and reviewed policy are required")
-        manifest = load_input_manifest(input_manifest_path)
+        input_manifest_path = Path(input_manifest_path)
+        policy_path = Path(policy_path)
         manifest_digest = file_sha256(input_manifest_path)
         root = Path(dataset_path).resolve(strict=True)
-        assert_unchanged(root, manifest, policy_path)
         with tempfile.TemporaryDirectory(prefix="oa-c11-snapshot-") as temporary:
-            snapshot = Path(temporary) / "dataset"
+            staging = Path(temporary)
+            # The manifest and policy may have the same name at their sources.
+            manifest_copy = staging / f"manifest{input_manifest_path.suffix}"
+            policy_copy = staging / f"policy{policy_path.suffix}"
+            snapshot = staging / "dataset"
+            shutil.copyfile(input_manifest_path, manifest_copy)
+            if file_sha256(manifest_copy) != manifest_digest:
+                raise ValueError("Input manifest changed during snapshot creation")
+            manifest = load_input_manifest(manifest_copy)
+            assert_unchanged(root, manifest, policy_path)
             shutil.copytree(root, snapshot, symlinks=True)
-            policy_copy = Path(temporary) / "policy.json"
             shutil.copyfile(policy_path, policy_copy)
             assert_unchanged(root, manifest, policy_path)
             assert_unchanged(snapshot, manifest, policy_copy)
-            yield snapshot, policy_copy
             if file_sha256(input_manifest_path) != manifest_digest:
+                raise ValueError("Input manifest changed during snapshot creation")
+            yield snapshot, policy_copy, manifest_copy
+            if any(
+                file_sha256(path) != manifest_digest
+                for path in (input_manifest_path, manifest_copy)
+            ):
                 raise ValueError("Input manifest changed during execution")
             assert_unchanged(root, manifest, policy_path)
             assert_unchanged(snapshot, manifest, policy_copy)
     except TrainingBlockedError:
         raise
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, yaml.YAMLError) as error:
         raise TrainingBlockedError(f"Input snapshot failed: {error}") from error

@@ -32,3 +32,9 @@ and the current lift/base proposal dependencies. Existing-head local baseline:
 Satya-authored commits still lack DCO sign-off; no shared history was rewritten.
 Physical/production acceptance remains NOT_VERIFIED. Recorder/converter/benchmark
 work is prepared separately for a dependent draft, not claimed as accepted here.
+
+22 November 2026 — Follow-up proposal based on PR #5 at `2469ab4` uses the
+same private manifest, policy and dataset bytes for C10 and C11, checks explicit
+episode identities and rejects contradictory report fields. C10 keeps recorded
+simulation outside real-episode evidence. See [canonical follow-up](docs/c10/pr5-current-review.md)
+for review order, the current DCO and CLA status, and software verification.

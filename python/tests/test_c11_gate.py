@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 from oa_embodied_ai.dataset_qa import episode as c10
+from oa_embodied_ai.training import inputs
 from oa_embodied_ai.training.cli import train_act
 from oa_embodied_ai.training.config import get_profile_config
 from oa_embodied_ai.training.gate import TrainingBlockedError, verify_training_gate
@@ -209,6 +210,47 @@ def test_missing_or_stale_supplied_report_blocks(protocol, tmp_path):
         model.assert_not_called()
 
 
+def test_supplied_report_requires_identical_json_types(protocol, tmp_path):
+    root, policy, manifest, report = protocol
+    supplied = tmp_path / "supplied.json"
+    supplied.write_text(json.dumps({**report, "exit_code": False}))
+    with (
+        patch.object(c10, "check_dataset", return_value=report),
+        pytest.raises(TrainingBlockedError, match="differs from fresh native QA"),
+    ):
+        verify_training_gate(
+            root, supplied, input_manifest_path=manifest, policy_path=policy
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("production_acceptance", "PASS", "Unexpected C10 production acceptance"),
+        ("source_profile", "SYNTHETIC", "Report label contradicts input origin"),
+    ],
+)
+def test_fresh_report_cannot_claim_conflicting_status(protocol, field, value, message):
+    root, policy, manifest, report = protocol
+    report[field] = value
+    with (
+        patch.object(c10, "check_dataset", return_value=report),
+        pytest.raises(TrainingBlockedError, match=message),
+    ):
+        verify_training_gate(root, input_manifest_path=manifest, policy_path=policy)
+
+
+@pytest.mark.parametrize("severity", ["ERROR", "BLOCKER"])
+def test_passing_finding_cannot_have_failure_severity(protocol, severity):
+    root, policy, manifest, report = protocol
+    report["findings"][0]["severity"] = severity
+    with (
+        patch.object(c10, "check_dataset", return_value=report),
+        pytest.raises(TrainingBlockedError, match="Contradictory finding severity"),
+    ):
+        verify_training_gate(root, input_manifest_path=manifest, policy_path=policy)
+
+
 def test_dataset_modified_after_report_is_blocked(protocol, tmp_path):
     root, policy, manifest, report = protocol
     old = tmp_path / "old.json"
@@ -276,6 +318,32 @@ def test_input_mutation_during_checker_blocks_startup(protocol, tmp_path):
                 policy_path=policy,
             )
         model.assert_not_called()
+
+
+def test_manifest_mutation_during_staging_never_reaches_checker(protocol, tmp_path):
+    root, policy, manifest, report = protocol
+    values = json.loads(manifest.read_text())
+    assert_unchanged = inputs.assert_unchanged
+
+    def change_selection_when_inventory_starts(*args):
+        manifest.write_text(json.dumps({**values, "episode_indices": [1]}))
+        assert_unchanged(*args)
+
+    with (
+        patch.object(
+            inputs, "assert_unchanged", side_effect=change_selection_when_inventory_starts
+        ),
+        patch.object(c10, "check_dataset", return_value=report) as checker,
+        pytest.raises(TrainingBlockedError, match="Input manifest changed"),
+    ):
+        train_act(
+            root,
+            get_profile_config("lerobot-v0.6.1-bi-openarm-position"),
+            output_dir=tmp_path / "run",
+            input_manifest_path=manifest,
+            policy_path=policy,
+        )
+    checker.assert_not_called()
 
 
 def test_gate_itself_rejects_missing_diagnostics(protocol):

@@ -172,6 +172,9 @@ supplies:
 - `real_episode`: full `dataset_id`, `dataset_revision`, `episode_id`,
   `episode_index`, plus external recording-review `evidence`. A producer's
   `data_origin: actual` claim alone cannot qualify.
+  An OpenAMRobot conversion manifest with `origin: simulation` or
+  `origin: synthetic` keeps the real-episode finding at `NOT_VERIFIED` even
+  when an acquired simulation sample uses C9 v1's `actual` field.
 
 All referenced artifact paths are dataset-relative, immutable inputs. A policy
 is provenance supplied to the checker, not a replacement for organization

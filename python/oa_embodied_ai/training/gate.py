@@ -59,7 +59,6 @@ def _synthetic_testing_ready(report, manifest):
         or type(report.get("exit_code")) is not int
         or report["exit_code"] != 2
         or report.get("training_ready") is not False
-        or report.get("production_acceptance") != "NOT_VERIFIED"
         or not isinstance(findings, list)
         or not findings
         or not isinstance(episodes, list)
@@ -176,17 +175,23 @@ def verify_training_gate(
                 raise ValueError("C10 origin contradicts trusted input origin")
         if report.get("quality_status", report["status"]) != report["status"]:
             raise ValueError("Contradictory report status")
+        if report.get("production_acceptance") != "NOT_VERIFIED":
+            raise ValueError("Unexpected C10 production acceptance status")
         if any(
-            f.get("severity") in ("REJECT", "BLOCKED", "NOT_VERIFIED")
-            and f.get("status") == "PASS"
+            f.get("status") == "PASS" and f.get("severity", "INFO") != "INFO"
             for f in report["findings"]
         ):
             raise ValueError("Contradictory finding severity")
-        if qa_report_path is not None and load_data(Path(qa_report_path)) != report:
+        report_sha256 = json_sha256(report)
+        if (
+            qa_report_path is not None
+            and json_sha256(load_data(Path(qa_report_path))) != report_sha256
+        ):
             raise ValueError("Supplied QA report differs from fresh native QA")
         synthetic = manifest["data_origin"] == "synthetic"
-        if synthetic and report.get("source_profile") == "ROBOT":
-            raise ValueError("ROBOT label contradicts synthetic origin")
+        source_profile = "SYNTHETIC" if synthetic else "ROBOT"
+        if report.get("source_profile", source_profile) != source_profile:
+            raise ValueError("Report label contradicts input origin")
         if synthetic:
             if not allow_synthetic_override or not _synthetic_testing_ready(
                 report, manifest
@@ -202,13 +207,13 @@ def verify_training_gate(
         return GateStatus(
             training_ready=decision["training_ready"],
             quality_status=decision["status"],
-            source_profile="SYNTHETIC" if synthetic else "ROBOT",
+            source_profile=source_profile,
             qa_report=report,
             reasons=decision["reasons"],
             is_synthetic_override=synthetic,
             input_manifest=manifest,
             decision=decision,
-            report_sha256=json_sha256(report),
+            report_sha256=report_sha256,
         )
     except TrainingBlockedError:
         raise

@@ -143,7 +143,7 @@ def get_profile_config(profile_name: str) -> ACTConfig:
             action_dim=19,
             channel_names=list(OPENAMROBOT_19DOF_CHANNELS),
         )
-    elif profile_name in {"lerobot-v0.6.1-bi-openarm-position", "bi-openarm-position"}:
+    elif profile_name == "lerobot-v0.6.1-bi-openarm-position":
         return ACTConfig(
             profile="lerobot-v0.6.1-bi-openarm-position",
             schema_revision="c9-contract-fixture",

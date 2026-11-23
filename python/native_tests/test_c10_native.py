@@ -113,6 +113,21 @@ class C10WrapperTests(unittest.TestCase):
         self.assertEqual(report["status"], "REJECT")
         self.assert_finding(report["findings"], "C10_NATIVE_METADATA")
 
+    def test_boolean_native_frame_indexes_do_not_match_integers(self):
+        for index, row in enumerate(self.native["rows"]):
+            row["frame_index"] = bool(index)
+        self.write()
+        report = self.run_gate()
+        self.assertEqual(report["status"], "REJECT")
+        self.assert_finding(report["findings"], "C10_NATIVE_DATA")
+
+    def test_episode_selection_rejects_repeated_or_boolean_indexes(self):
+        self.write()
+        for indices in ([False], [0, 0]):
+            with self.subTest(indices=indices):
+                report = check_dataset(self.path, self.path / "synthetic-policy.json", indices)
+                self.assert_finding(report["findings"], "C10_INPUT")
+
     def test_native_metadata_totals_cannot_contradict_episode_registry(self):
         self.native["info"]["total_frames"] = 99
         self.write()
@@ -144,6 +159,23 @@ class C10WrapperTests(unittest.TestCase):
         report = self.run_gate()
         self.assert_finding(report["findings"], "C10_REAL_EPISODE", "NOT_VERIFIED")
         self.assertFalse(report["training_ready"])
+
+    def test_converted_nonrobot_data_cannot_establish_real_recording_evidence(self):
+        self.sidecar["openamrobot"]["provenance"]["data_origin"] = "actual"
+        binding = self.sidecar["native_lerobot"]
+        self.policy["real_episode"] = {
+            key: binding[key] for key in ("dataset_id", "dataset_revision", "episode_id", "episode_index")
+        }
+        self.policy["real_episode"]["evidence"] = "Fabricated test assertion only"
+        self.write()
+        conversion = self.path / "meta/openamrobot/conversion.json"
+        for origin in ("simulation", "synthetic"):
+            with self.subTest(origin=origin):
+                conversion.write_text(json.dumps({"origin": origin}))
+                report = self.run_gate()
+                matches = self.assert_finding(report["findings"], "C10_REAL_EPISODE", "NOT_VERIFIED")
+                self.assertEqual([finding["observed"] for finding in matches], [origin])
+                self.assertFalse(report["training_ready"])
 
     def test_promoted_synthetic_report_still_blocks_consumer(self):
         from oa_embodied_ai.dataset_qa import training_readiness

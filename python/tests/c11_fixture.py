@@ -23,6 +23,12 @@ def synthetic_dataset(root):
         "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4"
     )
     info["total_episodes"], info["total_frames"] = 2, 4
+    policy["native_identity"] = {
+        "dataset_id": info.pop("dataset_id"),
+        "dataset_revision": info.pop("dataset_revision"),
+        "episode_ids": {},
+        "evidence": "SYNTHETIC fixture snapshot identity",
+    }
     policy["video_content"] = {name: {"max_identical_run": 1} for name in CAMERAS}
     pin = {
         "release": "synthetic-test-only",
@@ -88,12 +94,14 @@ def synthetic_dataset(root):
     episodes, rows = [], []
     for index in range(2):
         episode = deepcopy(native["episode"])
+        episode.pop("episode_id", None)
+        episode_id = f"synthetic-e{index}"
         episode.update(
             episode_index=index,
-            episode_id=f"synthetic-e{index}",
             dataset_from_index=2 * index,
             dataset_to_index=2 * index + 2,
         )
+        policy["native_identity"]["episode_ids"][str(index)] = episode_id
         for key in (k for k in info["features"] if k.startswith("observation.images.")):
             episode.update(
                 {
@@ -106,7 +114,7 @@ def synthetic_dataset(root):
         episodes.append(episode)
         sc = deepcopy(sidecar)
         sc["native_lerobot"].update(
-            episode_index=index, episode_id=episode["episode_id"]
+            episode_index=index, episode_id=episode_id
         )
         for sample in sc["openamrobot"]["samples"]:
             sample["episode_index"] = index
@@ -159,8 +167,8 @@ def synthetic_dataset(root):
     policy_path.write_text(json.dumps(policy))
     manifest = {
         "manifest_version": 1,
-        "dataset_id": info["dataset_id"],
-        "dataset_revision": info["dataset_revision"],
+        "dataset_id": policy["native_identity"]["dataset_id"],
+        "dataset_revision": policy["native_identity"]["dataset_revision"],
         "episode_indices": [0, 1],
         "profile": "lerobot-v0.6.1-bi-openarm-position",
         "data_origin": "synthetic",

@@ -44,12 +44,13 @@ def evaluate_c11(
     with bound_snapshot(dataset_path, input_manifest_path, policy_path) as (
         snapshot,
         policy_copy,
+        manifest_copy,
     ):
         gate = verify_training_gate(
             snapshot,
             qa_report_path,
             allow_synthetic_eval,
-            input_manifest_path=input_manifest_path,
+            input_manifest_path=manifest_copy,
             policy_path=policy_copy,
         )
         checkpoint_hash = file_sha256(checkpoint_path)

@@ -367,6 +367,13 @@ class C10SemanticTests(unittest.TestCase):
         findings, _ = capture(sidecar, native, policy)
         self.assert_finding(findings, "C10_BINDING", "NOT_VERIFIED")
 
+    def test_native_repo_id_cannot_hide_a_conflicting_dataset_id(self):
+        sidecar, native, policy = fixture()
+        native["info"]["repo_id"] = sidecar["native_lerobot"]["dataset_id"]
+        native["info"]["dataset_id"] = "contradictory-legacy-id"
+        findings, _ = capture(sidecar, native, policy)
+        self.assert_finding(findings, "C10_BINDING", "REJECT")
+
     def test_action_reference_offset_requires_explicit_policy(self):
         sidecar, native, policy = fixture()
         del policy["action_latency"]["reference_frame_offset"]

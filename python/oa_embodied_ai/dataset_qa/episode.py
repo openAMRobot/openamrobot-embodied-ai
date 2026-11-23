@@ -102,6 +102,8 @@ def native_metadata(root):
     episode_paths = sorted((root / "meta/episodes").glob("chunk-*/*.parquet"))
     episodes = [row for path in episode_paths for row in parquet(inside(root,path)).to_pylist()] if episode_paths else jsonl(inside(root, "meta/episodes.jsonl"))
     indexes = [row["episode_index"] for row in episodes]
+    if any(type(index) is not int or index < 0 for index in indexes):
+        raise ValueError("native episode_index must be a nonnegative integer")
     if len(set(indexes)) != len(indexes):
         raise ValueError("duplicate native episode_index")
     return info, tasks, {row["episode_index"]: row for row in episodes}
@@ -121,6 +123,9 @@ def read_rows(root, info, episode, emit, known_episode_indices=None):
             return None
         table = parquet(path)
         all_rows = table.to_pylist()
+        if any(type(row.get(key)) is not int or row[key] < 0
+               for row in all_rows for key in ("episode_index", "frame_index", "task_index")):
+            raise ValueError("native row episode_index, frame_index and task_index must be nonnegative integers")
         if known_episode_indices is not None:
             orphans = sorted({row.get("episode_index") for row in all_rows if row.get("episode_index") not in known_episode_indices},key=str)
             emit("C10_NATIVE_DATA", "REJECT" if orphans else "PASS",observed=orphans,
@@ -218,7 +223,7 @@ def videos(root, sidecar, info, episode, policy, emit):
             emit("C10_VIDEO", "REJECT", stream=name, observed=str(error), fix="Restore a decodable video and consistent frame range.")
 
 
-def evidence(root, sidecar, policy, emit):
+def evidence(root, sidecar, policy, emit, *, conversion_origin=None):
     am = sidecar["openamrobot"]
     approved = policy.get("approved") is True and bool(policy.get("id")) and bool(policy.get("evidence"))
     artifacts = policy.get("artifacts", []) if approved else []
@@ -276,11 +281,15 @@ def evidence(root, sidecar, policy, emit):
     # explicit per-index evidence with no fallback for an uncovered selection.
     real = (policy["real_episodes"].get(str(sidecar["native_lerobot"]["episode_index"]), {})
             if "real_episodes" in policy else policy.get("real_episode", {})) if approved else {}
-    real_verified = (am["provenance"]["data_origin"] == "actual" and bool(real.get("evidence"))
+    # C9 v1 uses "actual" for an acquired sample and has no simulation enum.
+    origin = am["provenance"]["data_origin"]
+    if conversion_origin in ("simulation", "synthetic"):
+        origin = conversion_origin
+    real_verified = (origin == "actual" and bool(real.get("evidence"))
                      and all(real.get(key) == sidecar["native_lerobot"][key]
                              for key in ("dataset_id","dataset_revision","episode_id","episode_index")))
     emit("C10_REAL_EPISODE", "PASS" if real_verified else "NOT_VERIFIED",
-         observed=am["provenance"]["data_origin"], expected="actual recording with provenance reviewed externally",
+         observed=origin, expected="actual recording with provenance reviewed externally",
          fix="Provide a real recorded episode; synthetic fixtures establish QA behavior only.")
 
 
@@ -314,6 +323,20 @@ def check_dataset(dataset_path, policy_path=None, episode_indices=None, *, c9_sc
     try:
         if not root.is_dir():
             raise FileNotFoundError("dataset path is not an available directory")
+        if episode_indices is not None:
+            episode_indices = tuple(episode_indices)
+            if (not episode_indices or any(type(index) is not int or index < 0 for index in episode_indices)
+                    or len(set(episode_indices)) != len(episode_indices)):
+                raise ValueError("episode selection must contain unique nonnegative integers")
+        conversion_origin = None
+        conversion_path = inside(root, "meta/openamrobot/conversion.json")
+        if conversion_path.exists():
+            conversion = load_data(conversion_path)
+            if not isinstance(conversion, dict):
+                raise ValueError("conversion manifest must be an object")
+            conversion_origin = conversion.get("origin")
+            if conversion_origin not in (None, "robot", "simulation", "synthetic"):
+                raise ValueError("conversion manifest has an unknown recording origin")
         policy = load_data(Path(policy_path)) if policy_path else {}
         if not isinstance(policy,dict):
             raise ValueError("policy must be an object")
@@ -394,7 +417,7 @@ def check_dataset(dataset_path, policy_path=None, episode_indices=None, *, c9_sc
                     "expected_native_length":length,
                     "fraction":len(covered)/length if isinstance(length,int) and length > 0 else None}
             videos(root,sidecar,info,episode,policy,emit)
-            evidence(root,sidecar,policy,emit)
+            evidence(root,sidecar,policy,emit,conversion_origin=conversion_origin)
             episode_findings = [f for f in findings if f["episode"] == index]
             episode_status = "REJECT" if any(f["status"] == "REJECT" for f in episode_findings) else "NOT_VERIFIED" if any(f["status"] == "NOT_VERIFIED" for f in episode_findings) else "PASS"
             reports.append({"episode_index":index,"status":episode_status,"metrics":metrics,

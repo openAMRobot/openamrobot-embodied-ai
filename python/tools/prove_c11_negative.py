@@ -24,7 +24,7 @@ CASES = [
     (
         "physical-promotion",
         "training/cli.py",
-        "test_c11_training.py::test_bounded_cpu_training_and_honest_checkpoint",
+        "test_c11_training.py::test_bounded_cpu_training_and_honest_checkpoint[False]",
     ),
     (
         "zero-image-fallback",
