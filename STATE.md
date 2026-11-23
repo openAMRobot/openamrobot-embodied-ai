@@ -85,3 +85,10 @@ run 44448676604 (python/tests/fixtures/baseline1_slice, recorded bytes) with one
 positive and one negative per check; prove_reference_negative.py reverts each check.
 Proposed profile digest now aad2e963 (integrity block added). Nothing is approved;
 a dataset converted with these rules is development evidence, simulation only.
+
+22 November 2026 — PR #8 follow-up at `cf7f283`: malformed timestamps and
+invalid duplicate payloads fail before replacement. The Proposed recording
+profile is bound to the released source bytes. Native LeRobot metadata stays
+writer-owned. The version 2 reference manifest retains per-source selections
+and timing. See [workstream review](docs/execution/baseline1-review.md) for
+the proposed decisions, evidence and integration dependencies.

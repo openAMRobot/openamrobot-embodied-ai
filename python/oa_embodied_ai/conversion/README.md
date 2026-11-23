@@ -215,8 +215,17 @@ frames cannot disappear silently.
 
 ### Verify a reference dataset (Proposed)
 
-`oa-verify-reference DATASET --bag BAG [--run-log LOG] [--require-clean-converter]`
-recomputes the conversion from the bag with the profile, rules and sidecar template
+`oa-verify-reference DATASET --bag BAG [--run-log LOG] [--require-clean-converter] [--expected-manifest-sha256 HEX]`
+
+Use the published digest of `conversion.json` as `--expected-manifest-sha256`
+when verifying a published release. Reference manifest v2 records per-source
+selection and receipt times, stand-ins, observation span and frames containing
+post-grid observations. The v2 dataset revision binds native files and their
+source evidence, and retains the recording revision label separately. The
+verifier still accepts v1. C9 identity remains in the
+sidecar, and a reviewed C10 policy supplies independent native identity for
+writer metadata without those identifiers.
+The verifier recomputes the conversion from the bag with the profile, rules and sidecar template
 recorded in `conversion.json` and refuses on the first difference:
 `TAMPERED_OUTPUT` (a file differs from `reference.output_sha256`), `SOURCE_MISMATCH`
 (bag files), `MANIFEST_MISMATCH` (an episode report), `SIDECAR_MISMATCH`,

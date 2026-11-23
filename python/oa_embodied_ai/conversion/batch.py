@@ -8,7 +8,7 @@ from oa_embodied_ai.conversion.native import ConversionEpisode, export_native_ep
 from oa_embodied_ai.conversion.validation import ConversionError
 from oa_embodied_ai.dataset_qa.strict_io import load_data
 from oa_embodied_ai.recording.bag import align, read_bag, validate_recording_phases
-from oa_embodied_ai.recording.profile import validate_profile
+from oa_embodied_ai.recording.profile import PROPOSED_CAPTURE_PROFILES, validate_profile
 from oa_embodied_ai.training.inputs import inventory
 
 
@@ -16,6 +16,10 @@ def prepare_episode(bag, profile, template, *, development=False, enabled=()):
     enabled = tuple(sorted(enabled))
     profile = validate_profile(profile, development=development, enabled=enabled)
     source_hashes = inventory(bag)
+    if "proposed_capture_profile" in enabled:
+        expected = PROPOSED_CAPTURE_PROFILES.get(profile["profile_id"], {}).get("source_bag_sha256")
+        if expected is not None and source_hashes != expected:
+            raise ConversionError("Source bag differs from the Proposed recording binding")
     timestamps, alignment, lift_phase = {}, {}, {}
     data = read_bag(bag, profile, report=timestamps)
     checked = reference.enabled(profile)

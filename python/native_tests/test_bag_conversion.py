@@ -34,11 +34,22 @@ def test_native_bag_to_lerobot_loader(tmp_path):
     from oa_embodied_ai.dataset_qa.episode import check_dataset
 
     dataset = tmp_path / "dataset"
+    info = json.loads((dataset / "meta/info.json").read_text())
+    assert not {"dataset_id", "dataset_revision"} & info.keys()
     sidecar = json.loads(
         (dataset / "meta/openamrobot/episodes/episode-000000.json").read_text()
     )
     policy = tmp_path / "synthetic-policy.json"
-    policy.write_text(json.dumps(synthetic_policy(sidecar)))
+    binding = sidecar["native_lerobot"]
+    test_policy = synthetic_policy(sidecar)
+    test_policy["native_identity"] = {
+        "evidence": "SYNTHETIC CDR test input",
+        "dataset_id": profile["dataset_id"],
+        "dataset_revision": profile["dataset_revision"],
+        "episode_ids": {"0": profile["episode_id"]},
+    }
+    assert binding["dataset_revision"] == profile["dataset_revision"]
+    policy.write_text(json.dumps(test_policy))
     decision = check_dataset(dataset, policy)
     assert not [f for f in decision["findings"] if f["status"] == "REJECT"]
     assert decision["status"] == "NOT_VERIFIED"

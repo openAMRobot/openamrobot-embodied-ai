@@ -93,7 +93,8 @@ def write(path, data):
         sec, nsec = divmod(row["stamp_ns"], 1_000_000_000)
         msg = t["sensor_msgs/msg/JointState"](
             t["std_msgs/msg/Header"](
-                t["builtin_interfaces/msg/Time"](sec, nsec), row["frame_id"]
+                t["builtin_interfaces/msg/Time"](sec, row.get("raw_nanosec", nsec)),
+                row["frame_id"],
             ),
             row["name"],
             *[
@@ -181,6 +182,30 @@ def test_a_decreasing_stamp_is_refused_even_with_keep_last(tmp_path):
     bag = write(tmp_path / "bag", data)
     with pytest.raises(ConversionError, match="Nonmonotonic or duplicate timestamps"):
         read_bag(bag, profile("keep_last"))
+
+
+def test_invalid_header_cannot_normalize_to_a_valid_equal_stamp(tmp_path):
+    data = recorded()
+    rows = data["/arm/joint_states"]["windows"][0]["rows"]
+    index = next(i for i, row in enumerate(rows[1:]) if row["stamp_ns"] == rows[i]["stamp_ns"])
+    row = rows[index]
+    row["raw_nanosec"] = row["stamp_ns"] % 1_000_000_000 + 1_000_000_000
+    row["stamp_ns"] -= 1_000_000_000
+    bag = write(tmp_path / "bag", data)
+    with pytest.raises(ConversionError, match="Invalid ROS header timestamp"):
+        read_bag(bag, profile("keep_last"))
+
+
+def test_bad_payload_cannot_hide_behind_an_equal_stamp(tmp_path):
+    data = recorded()
+    rows = data["/arm/joint_states"]["windows"][0]["rows"]
+    index = next(i for i, row in enumerate(rows[1:]) if row["stamp_ns"] == rows[i]["stamp_ns"])
+    rows[index]["position"][0] = float("nan")
+    capture = profile("keep_last")
+    capture["state_channels"][0].update(name=rows[index]["name"][0], joint=rows[index]["name"][0])
+    bag = write(tmp_path / "bag", data)
+    with pytest.raises(ConversionError, match="Invalid numeric value"):
+        read_bag(bag, capture)
 
 
 def test_only_keep_last_is_a_valid_rule():

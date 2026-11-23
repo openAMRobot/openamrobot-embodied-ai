@@ -31,12 +31,15 @@ from __future__ import annotations
 import argparse
 import bisect
 import copy
+import hashlib
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
 from oa_embodied_ai.conversion.validation import ConversionError, normalize_vector
+from oa_embodied_ai.dataset_qa.strict_io import unique_pairs
 
 ZERO_HASH = "sha256:" + "0" * 64
 DEGREE_UNITS = {"deg", "degree", "degrees", "deg/s", "degree/s", "degrees/s"}
@@ -94,7 +97,10 @@ def check_declaration(profile):
         )
     model = integrity.get("robot_model")
     if not isinstance(model, dict) or not (
-        (isinstance(model.get("sha256"), str) and len(model["sha256"]) == 64 and model.get("source"))
+        (isinstance(model.get("sha256"), str)
+         and re.fullmatch(r"[0-9a-f]{64}", model["sha256"])
+         and model["sha256"] != "0" * 64
+         and model.get("source"))
         or (model.get("sha256") is None and model.get("reason"))
     ):
         raise ConversionError("integrity.robot_model: sha256 with source, or null with a reason")
@@ -190,19 +196,22 @@ def _hint(value, channel):
     return ""
 
 
-def check_source(data, profile):
-    """Gripper sign and range (plus tolerance) of every recorded source sample."""
+def check_source(data, profile, *, discarded=None):
+    """Check gripper signs and ranges for kept samples or one pending discard."""
     from oa_embodied_ai.recording.bag import extract
 
     gripper = profile["integrity"]["gripper"]["channels"]
     counts = {}
     for kind in ("state", "action"):
         for channel in profile[kind + "_channels"]:
+            stream = channel["stream"]
+            if discarded is not None and discarded[0] != stream:
+                continue
             limits = channel.get("range")
             tolerance = channel.get("range_tolerance", 0)
             sign = gripper.get(channel["name"], {}).get("opening_sign")
             n = 0
-            for sample in data[channel["stream"]]:
+            for sample in data[stream] if discarded is None else (discarded[1],):
                 value = _convert(extract(sample, channel), channel, profile)
                 n += 1
                 if sign is not None and sign * value < -tolerance:
@@ -226,14 +235,22 @@ def check_source(data, profile):
 
 def bag_message_counts(bag):
     """Per-topic message counts from the bag's metadata.yaml."""
-    import yaml
+    from oa_embodied_ai.dataset_qa.strict_io import load_data
 
-    meta = yaml.safe_load((Path(bag) / "metadata.yaml").read_text())
-    info = meta["rosbag2_bagfile_information"]
-    return {
-        t["topic_metadata"]["name"]: int(t["message_count"])
-        for t in info["topics_with_message_count"]
-    }
+    try:
+        meta = load_data(Path(bag) / "metadata.yaml")
+        topics = meta["rosbag2_bagfile_information"]["topics_with_message_count"]
+        counts = {}
+        for entry in topics:
+            name, count = entry["topic_metadata"]["name"], entry["message_count"]
+            if not isinstance(name, str) or not name or name in counts:
+                raise ValueError(f"invalid or duplicate topic {name!r}")
+            if type(count) is not int or count < 0:
+                raise ValueError(f"invalid message count for {name!r}: {count!r}")
+            counts[name] = count
+    except (KeyError, TypeError, ValueError) as exc:
+        raise IntegrityError("TIMESTAMP_RECONCILE", f"invalid bag metadata: {exc}") from exc
+    return counts
 
 
 def check_timestamps(data, profile, timestamps, alignment, frames, metadata):
@@ -437,10 +454,13 @@ def calibration(bag, profile, frames):
     streams = {s["id"]: s for s in profile["streams"]}
     result = {}
     with AnyReader([Path(bag)]) as reader:
-        topics = {c.topic: c for c in reader.connections}
+        expected_topics = {topic for topic in sources.values() if isinstance(topic, str)}
+        wanted = [c for c in reader.connections if c.topic in expected_topics]
         contents = {}
-        wanted = [topics[t] for t in sources.values() if isinstance(t, str) and t in topics]
-        for conn, _, raw in reader.messages(connections=wanted):
+        messages = reader.messages(connections=wanted) if wanted else ()
+        for conn, _, raw in messages:
+            if conn.msgtype != "sensor_msgs/msg/CameraInfo":
+                raise IntegrityError("CALIBRATION_MISMATCH", f"{conn.topic}: expected sensor_msgs/msg/CameraInfo")
             content = _camera_info(reader.deserialize(raw, conn.msgtype))
             contents.setdefault(conn.topic, {})
             key = _json_sha256(content)
@@ -560,12 +580,83 @@ def fill_sidecar(sidecar, profile, report):
     # (sorted-key) manifest gives the same sidecar
     capture["provenance"]["software"].sort(key=lambda s: s["name"])
     model = profile["integrity"]["robot_model"]
-    if model.get("sha256"):
-        capture["provenance"]["robot_configuration_hash"] = "sha256:" + model["sha256"]
+    if not model.get("sha256"):
+        raise IntegrityError("TEMPLATE_HASH", "missing recorded model digest; cannot use the template configuration hash")
+    capture["provenance"]["robot_configuration_hash"] = "sha256:" + model["sha256"]
     text = json.dumps(sidecar)
     if ZERO_HASH in text:
         raise IntegrityError("TEMPLATE_HASH", "a template all-zero hash remains in the C9 sidecar")
     return sidecar
+
+
+def source_evidence(episode):
+    """Retain the selections behind the C9 v1 composite times for review."""
+    profile = episode.profile
+    observations = {c["stream"] for c in profile["state_channels"]}
+    observations.update(s["id"] for s in profile["streams"] if s.get("camera_key"))
+    streams = {
+        s["id"]: {
+            "topic": s["topic"],
+            "timestamp_source": s["timestamp_source"],
+            "clock_domain": s["clock_domain"],
+        }
+        for s in profile["streams"]
+    }
+    rows = []
+    for frame in episode.frames:
+        grid = frame["time_ns"]
+        selection = frame["selected"]
+        times = [selection[stream].time_ns for stream in observations]
+        rows.append({
+            "grid_ns": grid,
+            "observation_span_ns": max(times) - min(times),
+            "has_observation_after_grid": any(t > grid for t in times),
+            "streams": {
+                name: {
+                    "selected_ns": sample.time_ns,
+                    "receipt_ns": sample.receipt_ns,
+                    "stand_in": sample.time_ns is None,
+                }
+                for name, sample in selection.items()
+            },
+        })
+    return {
+        "streams": streams,
+        "action_timing": {
+            "selection": profile["integrity"]["action_convention"],
+            "timestamp_scope": "per-source header or bag receipt; the grid is a sampling reference",
+            "mixed_source_c9_v1_semantics": "NOT_VERIFIED",
+        },
+        "max_observation_span_ns": max(r["observation_span_ns"] for r in rows),
+        "frames_with_observations_after_grid": sum(r["has_observation_after_grid"] for r in rows),
+        "frames": rows,
+        "lift_phase_interval_source": profile.get("phase_evidence", {}).get("lift_positioning", {}).get("source"),
+        "configuration_evidence": {
+            "robot_configuration_id": profile["robot_configuration_id"],
+            "robot_model_sha256_scope": "recorded model bytes only",
+            "camera_info_sha256_scope": "recorded CameraInfo content; extrinsics and measured residuals unavailable",
+            "acceptance": "NOT_VERIFIED",
+        },
+    }
+
+
+def dataset_binding(episodes, native_hashes, selected_sources):
+    """Give v2 exports their own revision without reusing the source recording label."""
+    profile = episodes[0].profile
+    digest = _json_sha256({
+        "native": native_hashes,
+        "selected_sources": selected_sources,
+        "episodes": [{
+            "profile": episode.profile,
+            "source": episode.source_sha256,
+            "template": episode.template,
+        } for episode in episodes],
+    })
+    return {
+        "dataset_id": profile["dataset_id"],
+        "dataset_revision": "reference-v2-" + digest,
+        "source_revision_label": profile["dataset_revision"],
+    }
 
 
 def conversion_reference(episodes, template_hashes):
@@ -575,7 +666,7 @@ def conversion_reference(episodes, template_hashes):
 
     _, schema = load_c9_schema()
     return {
-        "manifest_version": 1,
+        "manifest_version": 2,
         "status": "development evidence: Proposed rules, unregistered profile; not validated",
         "converter": {"repository": "openAMRobot/openamrobot-embodied-ai", "see": "execution"},
         "configuration": {
@@ -587,19 +678,17 @@ def conversion_reference(episodes, template_hashes):
             "c9_schema": schema,
             "component_contract": profile.get("component_contract"),
         },
+        "episode_sources": [source_evidence(e) for e in episodes],
         "verify": "oa-verify-reference DATASET --bag BAG [--run-log LOG] recomputes this manifest",
     }
 
 
 def output_hashes(root):
-    from oa_embodied_ai.training.inputs import file_sha256
+    from oa_embodied_ai.training.inputs import inventory
 
-    root = Path(root)
-    return {
-        p.relative_to(root).as_posix(): file_sha256(p)
-        for p in sorted(root.rglob("*"))
-        if p.is_file() and p.relative_to(root).as_posix() != OUTPUT_MANIFEST
-    }
+    hashes = inventory(root)
+    hashes.pop(OUTPUT_MANIFEST, None)
+    return hashes
 
 
 # Verify -------------------------------------------------------------------------------------------------------------
@@ -607,6 +696,13 @@ def output_hashes(root):
 
 def _roundtrip(value):
     return json.loads(json.dumps(value, sort_keys=True, allow_nan=False))
+
+
+def _strict_json(data):
+    def reject_constant(value):
+        raise IntegrityError("MANIFEST", f"invalid JSON number {value}")
+
+    return json.loads(data, object_pairs_hook=unique_pairs, parse_constant=reject_constant)
 
 
 def _read_vectors(dataset):
@@ -617,7 +713,7 @@ def _read_vectors(dataset):
         raise IntegrityError("TAMPERED_OUTPUT", "no parquet data files")
     tables = [pq.read_table(f) for f in files]
     rows = {}
-    for column in ("observation.state", "action", "timestamp", "frame_index", "episode_index"):
+    for column in ("observation.state", "action", "timestamp", "frame_index", "episode_index", "index", "task_index"):
         rows[column] = [x for t in tables for x in t.column(column).to_pylist()]
     return rows
 
@@ -625,8 +721,8 @@ def _read_vectors(dataset):
 def _video_frames(dataset):
     try:
         import av
-    except ImportError:
-        return "NOT_VERIFIED: PyAV not installed"
+    except ImportError as exc:
+        raise IntegrityError("VIDEO_FRAMES", "PyAV is required to verify reference media") from exc
     counts = {}
     for path in sorted((Path(dataset) / "videos").rglob("*.mp4")):
         with av.open(str(path)) as container:
@@ -634,7 +730,7 @@ def _video_frames(dataset):
     return counts
 
 
-def verify(dataset, bag, *, run_log=None, require_clean_converter=False):
+def verify(dataset, bag, *, run_log=None, require_clean_converter=False, expected_manifest_sha256=None):
     """Recompute the conversion from the bag and compare it with the dataset; raise on the first difference."""
     import numpy as np
 
@@ -644,9 +740,17 @@ def verify(dataset, bag, *, run_log=None, require_clean_converter=False):
     from oa_embodied_ai.training.inputs import inventory
 
     dataset, bag = Path(dataset), Path(bag)
-    manifest = json.loads((dataset / OUTPUT_MANIFEST).read_text())
+    manifest_path = dataset / OUTPUT_MANIFEST
+    manifest_bytes = manifest_path.read_bytes()
+    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+    if expected_manifest_sha256 is not None and manifest_digest != expected_manifest_sha256:
+        raise IntegrityError("MANIFEST_MISMATCH", "conversion.json differs from the expected SHA-256")
+    manifest = _strict_json(manifest_bytes)
+    if not isinstance(manifest, dict):
+        raise IntegrityError("MANIFEST", "conversion.json must contain an object")
     reference = manifest.get("reference")
-    if not reference or len(manifest["episodes"]) != 1:
+    version = reference.get("manifest_version") if isinstance(reference, dict) else None
+    if type(version) is not int or version not in (1, 2) or len(manifest["episodes"]) != 1:
         raise IntegrityError("MANIFEST", "no reference binding for a single-episode dataset")
     result = {"dataset": str(dataset), "checks": {}}
     actual = output_hashes(dataset)
@@ -656,6 +760,15 @@ def verify(dataset, bag, *, run_log=None, require_clean_converter=False):
         raise IntegrityError("TAMPERED_OUTPUT", f"dataset files differ from the manifest: {changed}")
     result["checks"]["output_sha256"] = {"files": len(actual), "status": "PASS"}
     record = manifest["episodes"][0]
+    profile = record["profile"]
+    if (
+        manifest["profile"] != profile
+        or manifest["origin"] != profile["origin"]
+        or record["episode_id"] != profile["episode_id"]
+        or record["episode_index"] != 0
+        or manifest["source_bag_sha256"] != record["source_bag_sha256"]
+    ):
+        raise IntegrityError("MANIFEST_MISMATCH", "inconsistent recording or episode identity")
     if inventory(bag) != record["source_bag_sha256"]:
         raise IntegrityError("SOURCE_MISMATCH", f"bag files differ from the manifest: {bag}")
     result["checks"]["source_bag_sha256"] = {"files": len(record["source_bag_sha256"]), "status": "PASS"}
@@ -671,10 +784,15 @@ def verify(dataset, bag, *, run_log=None, require_clean_converter=False):
     }
     template = reference["configuration"]["sidecar_templates"][0]
     episode = prepare_episode(
-        bag, copy.deepcopy(record["profile"]), template,
-        development=record["profile"].get("origin") == "synthetic",
+        bag, copy.deepcopy(profile), template,
+        development=profile["origin"] == "synthetic",
         enabled=manifest["proposed_rules_enabled"],
     )
+    recomputed = conversion_reference([episode], [_json_sha256(template)])
+    if _roundtrip(recomputed["configuration"]) != reference["configuration"]:
+        raise IntegrityError("MANIFEST_MISMATCH", "recomputed capture configuration differs from the manifest")
+    if reference["manifest_version"] == 2 and _roundtrip(recomputed["episode_sources"]) != reference["episode_sources"]:
+        raise IntegrityError("MANIFEST_MISMATCH", "recomputed per-source evidence differs from the manifest")
     for key, value in (
         ("stream_timestamps", episode.timestamp_report),
         ("alignment", episode.alignment_report),
@@ -686,8 +804,10 @@ def verify(dataset, bag, *, run_log=None, require_clean_converter=False):
     result["checks"]["recomputed_reports"] = {"status": "PASS"}
     sidecar = sidecar_for(episode.profile, episode.frames, template, episode_index=0, task_index=0,
                           reference=episode.reference_report)
-    stored = json.loads((dataset / "meta/openamrobot/episodes/episode-000000.json").read_text())
-    if _roundtrip(sidecar) != stored:
+    if reference["manifest_version"] == 2:
+        sidecar["native_lerobot"]["dataset_revision"] = reference["dataset_binding"]["dataset_revision"]
+    stored = _strict_json((dataset / "meta/openamrobot/episodes/episode-000000.json").read_bytes())
+    if _json_sha256(sidecar) != _json_sha256(stored):
         raise IntegrityError("SIDECAR_MISMATCH", "C9 sidecar recomputed from the bag differs from the stored sidecar")
     result["checks"]["c9_sidecar"] = {"status": "PASS"}
     rows = _read_vectors(dataset)
@@ -700,19 +820,25 @@ def verify(dataset, bag, *, run_log=None, require_clean_converter=False):
     problem = compare_actions(rows["action"], [f["action"] for f in frames], float32=True)
     if problem:
         raise IntegrityError("ACTION_SHIFTED" if "shifted" in problem else "ACTION_MISMATCH", problem)
-    fps = record["profile"]["fps"]
-    for i, (stamp, index) in enumerate(zip(rows["timestamp"], rows["frame_index"], strict=True)):
-        if index != i or not native_timestamp_matches(stamp, i, fps):
-            raise IntegrityError("TIMESTAMP_MISMATCH", f"row {i}: frame_index {index}, timestamp {stamp}")
+    fps = profile["fps"]
+    bindings = zip(rows["timestamp"], rows["frame_index"], rows["episode_index"],
+                   rows["index"], rows["task_index"], strict=True)
+    for i, (stamp, frame_index, episode_index, index, task_index) in enumerate(bindings):
+        indices = (frame_index, episode_index, index, task_index)
+        if any(type(value) is not int for value in indices) or indices != (i, 0, i, 0) or not native_timestamp_matches(stamp, i, fps):
+            raise IntegrityError("TIMESTAMP_MISMATCH", f"row {i}: invalid native frame, episode, task, or time binding")
     result["checks"]["vectors_and_timestamps"] = {"frames": len(frames), "status": "PASS"}
     videos = _video_frames(dataset)
-    if isinstance(videos, dict):
-        wrong = {k: v for k, v in videos.items() if v != len(frames)}
-        if wrong or len(videos) != 4:
-            raise IntegrityError("VIDEO_FRAMES", f"decoded frame counts {videos} for {len(frames)} frames")
-        result["checks"]["video_frames"] = {"files": videos, "status": "PASS"}
-    else:
-        result["checks"]["video_frames"] = {"status": videos}
+    keys = {s["camera_key"] for s in profile["streams"] if s.get("camera_key")}
+    video_keys = {Path(path).parts[1] for path in videos if len(Path(path).parts) >= 3}
+    if len(videos) != len(keys) or video_keys != keys or any(n != len(frames) for n in videos.values()):
+        raise IntegrityError("VIDEO_FRAMES", f"decoded frame counts {videos} for {len(frames)} frames")
+    result["checks"]["video_frames"] = {"files": videos, "status": "PASS"}
+    if reference["manifest_version"] == 2:
+        native_hashes = {name: digest for name, digest in actual.items()
+                         if not name.startswith("meta/openamrobot/")}
+        if dataset_binding([episode], native_hashes, recomputed["episode_sources"]) != reference["dataset_binding"]:
+            raise IntegrityError("MANIFEST_MISMATCH", "recomputed dataset revision differs from the manifest")
     model = record["reference"]["robot_model"]
     if run_log is None or not model.get("sha256"):
         result["checks"]["robot_model"] = {"status": "NOT_RECOMPUTED", "reason": "no --run-log" if run_log is None else model.get("reason")}
@@ -723,6 +849,9 @@ def verify(dataset, bag, *, run_log=None, require_clean_converter=False):
         result["checks"]["robot_model"] = {"status": "PASS", "run_log": str(run_log)}
     result["dataset_sha256"] = _json_sha256(actual)
     result["manifest_sha256"] = _json_sha256(manifest)
+    result["manifest_file_sha256"] = manifest_digest
+    if output_hashes(dataset) != actual or manifest_path.read_bytes() != manifest_bytes:
+        raise IntegrityError("TAMPERED_OUTPUT", "dataset artifacts changed during verification")
     result["status"] = "PASS"
     return result
 
@@ -733,12 +862,14 @@ def main(argv=None):
     parser.add_argument("--bag", type=Path, required=True)
     parser.add_argument("--run-log", type=Path)
     parser.add_argument("--require-clean-converter", action="store_true")
+    parser.add_argument("--expected-manifest-sha256", help="Trusted SHA-256 of the conversion.json file")
     parser.add_argument("--json", type=Path)
     args = parser.parse_args(argv)
     try:
         result = verify(args.dataset, args.bag, run_log=args.run_log,
-                        require_clean_converter=args.require_clean_converter)
-    except (ConversionError, OSError, ValueError, KeyError) as exc:
+                        require_clean_converter=args.require_clean_converter,
+                        expected_manifest_sha256=args.expected_manifest_sha256)
+    except (ConversionError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f"REJECT: {exc}")
         return 2
     text = json.dumps(result, indent=2, sort_keys=True)

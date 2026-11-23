@@ -17,6 +17,11 @@ PROPOSED_CAPTURE_PROFILES = {
     "openamrobot-baseline1-gazebo-sim-oracle-v1": {
         "path": "configs/capture_profiles/proposed/openamrobot-baseline1-gazebo-sim-oracle-v1.json",
         "sha256": "aad2e9636cf2d06406199e568d5b69100139e1fc22b79240f44f72038f6ecbce",
+        "recording_profile_sha256": "e0fe1bf9a4a35d7c39451bf1b02182a72099c139d7849c94d68416095b2ee5d1",
+        "source_bag_sha256": {
+            "bag_0.mcap": "4b1f23f220b1b8aaedeff6da34e76131aee62373399683bd083087418459bf50",
+            "metadata.yaml": "cf2a9bb5fc3dcfc0476a6fb1372df863e2ae956f137e456c8cf327e829d27f47",
+        },
         "status": "proposed",
         "evidence": "openamr-upperbody-sw run 44448676604 (Gazebo, sim-oracle); simulation only",
     },
@@ -252,6 +257,8 @@ def capture_contract_digest(profile):
 
 def _proposed_binding(profile, enabled):
     """The Proposed entry a caller enabled, or None. Grants no approval."""
+    from oa_embodied_ai.training.inputs import json_sha256
+
     entry = PROPOSED_CAPTURE_PROFILES.get(profile.get("profile_id"))
     if "proposed_capture_profile" not in enabled or entry is None:
         return None
@@ -260,6 +267,11 @@ def _proposed_binding(profile, enabled):
     if entry.get("sha256") != capture_contract_digest(profile):
         raise ConversionError(
             "Proposed profile: capture contract differs from its Proposed binding"
+        )
+    recording_profile_sha256 = entry.get("recording_profile_sha256")
+    if recording_profile_sha256 is not None and recording_profile_sha256 != json_sha256(profile):
+        raise ConversionError(
+            "Proposed profile: provenance differs from its Proposed recording binding"
         )
     return entry
 

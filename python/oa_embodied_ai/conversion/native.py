@@ -437,14 +437,22 @@ def export_native_episodes(episodes, output):
                 writer.save_episode(parallel_encoding=False)
         finally:
             writer.finalize()
-        info_path = root / "meta/info.json"
-        info = json.loads(info_path.read_text())
-        info.update(
-            dataset_id=profile["dataset_id"],
-            dataset_revision=profile["dataset_revision"],
-        )
-        _dump(info_path, info)
+        from oa_embodied_ai.conversion import reference
+        from oa_embodied_ai.training.inputs import json_sha256
+
+        reference_manifest = None
+        if episodes[0].reference_report:
+            reference_manifest = reference.conversion_reference(
+                episodes, [json_sha256(e.template) for e in episodes]
+            )
+            reference_manifest["dataset_binding"] = reference.dataset_binding(
+                episodes, inventory(root), reference_manifest["episode_sources"]
+            )
         for i, sidecar in enumerate(sidecars):
+            if reference_manifest:
+                sidecar["native_lerobot"]["dataset_revision"] = reference_manifest[
+                    "dataset_binding"
+                ]["dataset_revision"]
             _dump(root / f"meta/openamrobot/episodes/episode-{i:06d}.json", sidecar)
         records = [
             {
@@ -518,14 +526,9 @@ def export_native_episodes(episodes, output):
             "frames_loaded": len(loaded),
             "status": "PASS",
         }
-        if episodes[0].reference_report:
+        if reference_manifest:
             # Proposed reference_integrity: bind every written file; conversion.json last
-            from oa_embodied_ai.conversion import reference
-            from oa_embodied_ai.training.inputs import json_sha256
-
-            manifest["reference"] = reference.conversion_reference(
-                episodes, [json_sha256(e.template) for e in episodes]
-            )
+            manifest["reference"] = reference_manifest
             manifest["reference"]["output_sha256"] = reference.output_hashes(root)
         _dump(root / "meta/openamrobot/conversion.json", manifest)
         for episode in episodes:

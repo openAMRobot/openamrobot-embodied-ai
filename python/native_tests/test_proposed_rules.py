@@ -152,7 +152,7 @@ def test_the_baseline1_profile_declares_only_listed_rules():
 
 def test_a_proposed_profile_converts_only_when_enabled_and_bound(tmp_path, monkeypatch):
     from oa_embodied_ai.recording import profile as module
-    from oa_embodied_ai.training.inputs import file_sha256
+    from oa_embodied_ai.training.inputs import file_sha256, json_sha256
 
     capture = baseline1()
     contract = {"component_profile_version": 1, "c9_contract_version": 1, "status": "proposed",
@@ -160,7 +160,11 @@ def test_a_proposed_profile_converts_only_when_enabled_and_bound(tmp_path, monke
     path = tmp_path / "contract.json"
     path.write_text(json.dumps(contract))
     capture["component_contract"] = {"path": str(path), "sha256": file_sha256(path)}
-    entry = dict(PROPOSED_CAPTURE_PROFILES[capture["profile_id"]], sha256=capture_contract_digest(capture))
+    entry = dict(
+        PROPOSED_CAPTURE_PROFILES[capture["profile_id"]],
+        sha256=capture_contract_digest(capture),
+        recording_profile_sha256=json_sha256(capture),
+    )
     monkeypatch.setitem(module.PROPOSED_CAPTURE_PROFILES, capture["profile_id"], entry)
     rules = capture["proposed_rules"]
     with pytest.raises(ConversionError, match="Unapproved profile"):

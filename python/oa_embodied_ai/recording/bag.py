@@ -35,6 +35,8 @@ def read_bag(path, profile, report=None):
     """
     from rosbags.highlevel import AnyReader
 
+    from oa_embodied_ai.conversion import reference
+
     counts = {
         s["id"]: {"messages": 0, "equal_timestamp_dropped": 0}
         for s in profile["streams"]
@@ -45,6 +47,8 @@ def read_bag(path, profile, report=None):
         raise ConversionError(f"ROS bag metadata missing: {path}/metadata.yaml")
     result = {s["id"]: [] for s in profile["streams"]}
     by_topic = {s["topic"]: s for s in profile["streams"]}
+    vectors = _vector_sources(profile)
+    reference_checks = reference.enabled(profile)
     try:
         with AnyReader([path]) as reader:
             actual = {c.topic: c.msgtype for c in reader.connections}
@@ -84,9 +88,12 @@ def read_bag(path, profile, report=None):
                         raise ConversionError(
                             f"Stream '{stream['id']}' missing acquisition timestamp"
                         )
-                    stamp = int(header.stamp.sec) * 1_000_000_000 + int(
-                        header.stamp.nanosec
-                    )
+                    if not 0 <= header.stamp.nanosec < 1_000_000_000:
+                        raise ConversionError(
+                            f"Invalid ROS header timestamp on '{stream['id']}' "
+                            f"at receipt {receipt}: nanosec={header.stamp.nanosec}"
+                        )
+                    stamp = int(header.stamp.sec) * 1_000_000_000 + int(header.stamp.nanosec)
                 samples = result[stream["id"]]
                 counts[stream["id"]]["messages"] += 1
                 if samples and (
@@ -100,6 +107,17 @@ def read_bag(path, profile, report=None):
                         f"Nonmonotonic or duplicate timestamps / clock discontinuity: '{stream['id']}'"
                     )
                 if samples and stamp == samples[-1].time_ns:
+                    # Validate bytes that resampling will no longer see.
+                    if stream.get("camera_key"):
+                        decode_image(samples[-1].message)
+                    if reference_checks:
+                        reference.check_source(result, profile, discarded=(stream["id"], samples[-1]))
+                    else:
+                        for kind, stream_id, channels in vectors:
+                            if stream_id == stream["id"]:
+                                _validate_vector_sample(
+                                    samples[-1], channels, profile, kind, stream_id
+                                )
                     samples[-1] = Sample(stamp, receipt, msg)
                     counts[stream["id"]]["equal_timestamp_dropped"] += 1
                     continue
@@ -198,37 +216,41 @@ def decode_image(msg):
     return np.ascontiguousarray(image[:, :, ::-1] if msg.encoding == "bgr8" else image)
 
 
-def validate_source_samples(data, profile, flags=None):
-    """Reject invalid source messages even if they fall between export-grid frames.
-
-    `flags` (Proposed range_tolerance) counts, per channel, the source samples
-    kept inside the declared tolerance at a model limit."""
+def _vector_sources(profile):
+    sources = []
     for kind in ("state", "action"):
         by_stream = {}
-        for channel in profile[kind + "_channels"]:
+        for channel in profile.get(kind + "_channels", []):
             by_stream.setdefault(channel["stream"], []).append(channel)
-        for stream, channels in by_stream.items():
-            for sample in data[stream]:
-                try:
-                    values = [extract(sample, c) for c in channels]
-                    normalize_vector(
-                        values,
-                        {
-                            "representation": "qpos",
-                            "names": [c["name"] for c in channels],
-                            "units": [c["source_unit"] for c in channels],
-                        },
-                        channels,
-                        profile=profile["profile_id"],
-                        components=list(
-                            dict.fromkeys(c["component"] for c in channels)
-                        ),
-                        flags=flags,
-                    )
-                except (TypeError, AttributeError, IndexError) as exc:
-                    raise ConversionError(
-                        f"Malformed {kind} source sample in stream '{stream}' at {sample.time_ns}"
-                    ) from exc
+        sources.extend((kind, stream, channels) for stream, channels in by_stream.items())
+    return sources
+
+
+def _validate_vector_sample(sample, channels, profile, kind, stream, flags=None):
+    try:
+        normalize_vector(
+            [extract(sample, c) for c in channels],
+            {
+                "representation": "qpos",
+                "names": [c["name"] for c in channels],
+                "units": [c["source_unit"] for c in channels],
+            },
+            channels,
+            profile=profile["profile_id"],
+            components=list(dict.fromkeys(c["component"] for c in channels)),
+            flags=flags,
+        )
+    except (TypeError, AttributeError, IndexError) as exc:
+        raise ConversionError(
+            f"Malformed {kind} source sample in stream '{stream}' at {sample.time_ns}"
+        ) from exc
+
+
+def validate_source_samples(data, profile, flags=None):
+    """Reject invalid kept messages even between grid frames and count range flags."""
+    for kind, stream, channels in _vector_sources(profile):
+        for sample in data[stream]:
+            _validate_vector_sample(sample, channels, profile, kind, stream, flags)
     for stream in profile["streams"]:
         if stream.get("camera_key"):
             for sample in data[stream["id"]]:

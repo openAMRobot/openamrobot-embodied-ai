@@ -55,6 +55,8 @@ def bind(tmp_path, monkeypatch):
         profile["component_contract"] = {"path": str(path), "sha256": file_sha256(path)}
         entry = dict(profiles.PROPOSED_CAPTURE_PROFILES[profile["profile_id"]],
                      sha256=profiles.capture_contract_digest(profile))
+        entry.pop("recording_profile_sha256", None)
+        entry.pop("source_bag_sha256", None)
         monkeypatch.setitem(profiles.PROPOSED_CAPTURE_PROFILES, profile["profile_id"], entry)
         return profile["proposed_rules"] + ["proposed_capture_profile"]
 
@@ -126,6 +128,35 @@ def test_the_recorded_slice_passes_every_declared_check(bind):
     calibration = episode.reference_report["calibration"]
     assert {v["status"] for v in calibration.values()} == {"recorded"}
     assert calibration["base_camera_rgbd_image"]["fx"] == pytest.approx(554.3827, abs=1e-4)
+    sources = reference.source_evidence(episode)
+    assert len(sources["frames"]) == len(episode.frames)
+    assert sources["streams"]["cmd_vel"]["timestamp_source"] == "bag"
+    assert sources["lift_phase_interval_source"] == "command_to_arrival"
+    assert sources["configuration_evidence"]["acceptance"] == "NOT_VERIFIED"
+    assert sources["frames_with_observations_after_grid"] > 0
+    for recorded, frame in zip(sources["frames"], episode.frames, strict=True):
+        selected = frame["selected"]["cmd_vel"]
+        assert recorded["streams"]["cmd_vel"] == {
+            "selected_ns": selected.time_ns,
+            "receipt_ns": selected.receipt_ns,
+            "stand_in": False,
+        }
+
+
+def test_published_recording_identity_cannot_be_relabelled():
+    profile = json.loads(PROFILE.read_text())
+    profile["origin"] = "robot"
+    with pytest.raises(ConversionError, match="differs from its Proposed recording binding"):
+        profiles.validate_profile(profile, enabled=profile["proposed_rules"] + ["proposed_capture_profile"])
+
+
+def test_published_profile_refuses_a_substituted_bag(bind):
+    profile = json.loads(PROFILE.read_text())
+    entry = profiles.PROPOSED_CAPTURE_PROFILES[profile["profile_id"]]
+    enabled = bind(profile)
+    profiles.PROPOSED_CAPTURE_PROFILES[profile["profile_id"]]["source_bag_sha256"] = entry["source_bag_sha256"]
+    with pytest.raises(ConversionError, match="Source bag differs from the Proposed recording binding"):
+        prepare(FIXTURE, profile, enabled)
 
 
 def test_the_sidecar_carries_recorded_hashes_not_template_values(bind):
@@ -269,12 +300,16 @@ def test_the_sidecar_does_not_depend_on_the_key_order_of_the_profile(bind):
     assert json.dumps(again, sort_keys=True) == json.dumps(first, sort_keys=True)
 
 
-def test_a_template_hash_never_remains_in_the_sidecar(bind):
+@pytest.mark.parametrize(
+    "template_hash", [reference.ZERO_HASH, "sha256:" + "a" * 64], ids=["zero", "unrelated-digest"]
+)
+def test_a_template_hash_never_remains_in_the_sidecar(bind, template_hash):
     from oa_embodied_ai.conversion.native import sidecar_for
 
     profile = baseline1_slice()
     profile["integrity"]["robot_model"] = {"sha256": None, "reason": "test: model hash not recorded"}
     episode = prepare(FIXTURE, profile, bind(profile))
+    episode.template["openamrobot"]["provenance"]["robot_configuration_hash"] = template_hash
     assert {"item": "robot_model_sha256", "reason": "test: model hash not recorded"} in episode.reference_report["not_available"]
     with pytest.raises(IntegrityError, match="TEMPLATE_HASH"):
         sidecar_for(episode.profile, episode.frames, episode.template, reference=episode.reference_report)
@@ -305,10 +340,17 @@ def test_a_converted_slice_verifies_and_converts_identically(bind, tmp_path):
     a = convert(bind, tmp_path, "a")
     b = convert(bind, tmp_path, "b")
     manifest = json.loads((a / reference.OUTPUT_MANIFEST).read_text())
+    binding = manifest["reference"]["dataset_binding"]
+    sidecar = json.loads((a / "meta/openamrobot/episodes/episode-000000.json").read_text())
+    assert binding["source_revision_label"] == baseline1_slice()["dataset_revision"]
+    assert binding["dataset_revision"].startswith("reference-v2-")
+    assert sidecar["native_lerobot"]["dataset_revision"] == binding["dataset_revision"]
     assert manifest["reference"]["output_sha256"] == reference.output_hashes(a) == reference.output_hashes(b)
     assert (a / reference.OUTPUT_MANIFEST).read_bytes() == (b / reference.OUTPUT_MANIFEST).read_bytes()
-    result = reference.verify(a, FIXTURE)
+    digest = hashlib.sha256((a / reference.OUTPUT_MANIFEST).read_bytes()).hexdigest()
+    result = reference.verify(a, FIXTURE, expected_manifest_sha256=digest)
     assert result["status"] == "PASS"
+    assert result["manifest_file_sha256"] == digest
     assert result["checks"]["vectors_and_timestamps"] == {"frames": 23, "status": "PASS"}
     assert result["checks"]["robot_model"]["status"] == "NOT_RECOMPUTED"
 
@@ -346,6 +388,56 @@ def test_a_manifest_count_that_differs_from_the_bag_is_refused(bind, tmp_path):
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     with pytest.raises(IntegrityError, match="MANIFEST_MISMATCH: episode stream_timestamps"):
         reference.verify(out, FIXTURE)
+
+
+def test_a_rewritten_manifest_cannot_override_the_published_digest(bind, tmp_path):
+    out = convert(bind, tmp_path, "rewritten")
+    path = out / reference.OUTPUT_MANIFEST
+    data = path.read_bytes()
+    path.write_bytes(data + b"\n")
+    with pytest.raises(IntegrityError, match="conversion.json differs from the expected SHA-256"):
+        reference.verify(out, FIXTURE, expected_manifest_sha256=hashlib.sha256(data).hexdigest())
+
+
+@pytest.mark.parametrize("wrong_index", [1, False])
+def test_rehashed_native_rows_cannot_change_the_episode_binding(bind, tmp_path, wrong_index):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    out = convert(bind, tmp_path, "wrong-episode")
+    path = next((out / "data").rglob("*.parquet"))
+    table = pq.read_table(path)
+    field = table.schema.get_field_index("episode_index")
+    episodes = pa.array([wrong_index] * table.num_rows)
+    pq.write_table(table.set_column(field, "episode_index", episodes), path)
+    rebind(out)
+    with pytest.raises(IntegrityError, match="TIMESTAMP_MISMATCH: .*episode"):
+        reference.verify(out, FIXTURE)
+
+
+def test_verification_detects_output_changes_during_decode(bind, tmp_path, monkeypatch):
+    out = convert(bind, tmp_path, "changed-after-read")
+    decode = reference._video_frames
+
+    def mutate(dataset):
+        counts = decode(dataset)
+        (dataset / "meta/stats.json").write_text("{}")
+        return counts
+
+    monkeypatch.setattr(reference, "_video_frames", mutate)
+    with pytest.raises(IntegrityError, match="changed during verification"):
+        reference.verify(out, FIXTURE)
+
+
+def test_malformed_bag_count_cannot_be_coerced_to_an_integer(tmp_path):
+    (tmp_path / "metadata.yaml").write_text(
+        "rosbag2_bagfile_information:\n"
+        "  topics_with_message_count:\n"
+        "    - topic_metadata: {name: /cmd_vel}\n"
+        "      message_count: 1.9\n"
+    )
+    with pytest.raises(IntegrityError, match="TIMESTAMP_RECONCILE: .*invalid message count"):
+        reference.bag_message_counts(tmp_path)
 
 
 def test_another_bag_is_refused(bind, tmp_path):

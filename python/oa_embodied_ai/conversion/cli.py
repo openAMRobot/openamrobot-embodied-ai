@@ -7,7 +7,7 @@ from pathlib import Path
 from jsonschema.exceptions import ValidationError
 
 from oa_embodied_ai.conversion.batch import convert_collection, prepare_episode
-from oa_embodied_ai.conversion.native import export_native_episodes
+from oa_embodied_ai.conversion.native import export_native_episodes, validate_collection
 from oa_embodied_ai.conversion.validation import ConversionError
 from oa_embodied_ai.dataset_qa.strict_io import load_data
 
@@ -56,7 +56,9 @@ def main(argv=None):
                 development=args.synthetic_development,
                 enabled=args.enable_proposed,
             )
-            if not args.validate_only:
+            if args.validate_only:
+                validate_collection([episode], args.output)
+            else:
                 export_native_episodes([episode], args.output)
         if args.validate_only:
             print(
