@@ -45,11 +45,16 @@ def require_components(declared, available, profile):
             )
 
 
-def normalize_vector(values, metadata, channels, *, profile, components):
+def normalize_vector(values, metadata, channels, *, profile, components, flags=None):
     """Normalize an explicitly named source vector; never infer a mapping by size.
 
     Metadata includes representation, ordered names and units. Cartesian 16D
     poses cannot be interpreted as two seven-joint arms and grippers.
+
+    Proposed (19 Nov 2026), only where a validated profile declares them:
+    `source_unit: stop_index` maps an integer index to `stop_targets.values`;
+    `range_tolerance` keeps a value that lies outside `range` by at most the
+    tolerance, unchanged (never clamped), and counts it in `flags[name]`.
     """
     if (
         not isinstance(channels, list)
@@ -102,21 +107,41 @@ def normalize_vector(values, metadata, channels, *, profile, components):
             )
         if not isinstance(source_unit, str):
             raise ConversionError("Malformed source metadata: unit must be a string")
-        factor = CONVERSIONS.get((source_unit, channel["unit"]))
-        if factor is None:
-            raise ConversionError(
-                f"Unsupported unit conversion for '{channel['name']}': {source_unit} -> {channel['unit']}"
+        targets = channel.get("stop_targets")
+        if source_unit == "stop_index" and isinstance(targets, Mapping):
+            if (
+                value != int(value)
+                or not 0 <= int(value) < len(targets["values"])
+                or targets.get("unit") != channel["unit"]
+            ):
+                raise ConversionError(
+                    f"Stop index {value} of '{channel['name']}' has no declared target"
+                )
+            value = float(targets["values"][int(value)])
+        else:
+            factor = CONVERSIONS.get((source_unit, channel["unit"]))
+            if factor is None:
+                raise ConversionError(
+                    f"Unsupported unit conversion for '{channel['name']}': {source_unit} -> {channel['unit']}"
+                )
+            value = (
+                value / 1000
+                if (source_unit, channel["unit"]) == ("mm", "m")
+                else value * factor
             )
-        value = (
-            value / 1000
-            if (source_unit, channel["unit"]) == ("mm", "m")
-            else value * factor
-        )
         limits = channel.get("range")
         if limits is not None and not limits[0] <= value <= limits[1]:
-            raise ConversionError(
-                f"Component '{channel['component']}' channel '{channel['name']}' outside {limits} {channel['unit']}"
-            )
+            tolerance = channel.get("range_tolerance")
+            if (
+                isinstance(tolerance, (int, float))
+                and limits[0] - tolerance <= value <= limits[1] + tolerance
+            ):
+                if flags is not None:
+                    flags[channel["name"]] = flags.get(channel["name"], 0) + 1
+            else:
+                raise ConversionError(
+                    f"Component '{channel['component']}' channel '{channel['name']}' outside {limits} {channel['unit']}"
+                )
         output.append(value)
     return output
 

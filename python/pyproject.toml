@@ -34,6 +34,7 @@ oa-c10-check = "oa_embodied_ai.dataset_qa.episode:main"
 oa-c11-train = "oa_embodied_ai.training.cli:main"
 oa-record-bag = "oa_embodied_ai.recording.cli:main"
 oa-convert-bag = "oa_embodied_ai.conversion.cli:main"
+oa-verify-reference = "oa_embodied_ai.conversion.reference:main"
 oa-benchmark-act = "oa_embodied_ai.benchmarking.runtime:main"
 oa-c11-eval = "oa_embodied_ai.evaluation.cli:main"
 

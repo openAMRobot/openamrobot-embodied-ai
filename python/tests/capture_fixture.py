@@ -293,6 +293,8 @@ def bind_converted_for_synthetic_training(root):
                 },
                 native_identity={
                     "evidence": "SYNTHETIC caller selection only",
+                    "dataset_id": sidecar["native_lerobot"]["dataset_id"],
+                    "dataset_revision": sidecar["native_lerobot"]["dataset_revision"],
                     "episode_ids": {},
                 },
             )

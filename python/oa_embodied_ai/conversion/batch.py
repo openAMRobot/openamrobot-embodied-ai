@@ -3,26 +3,59 @@
 
 from pathlib import Path
 
+from oa_embodied_ai.conversion import reference
 from oa_embodied_ai.conversion.native import ConversionEpisode, export_native_episodes
 from oa_embodied_ai.conversion.validation import ConversionError
 from oa_embodied_ai.dataset_qa.strict_io import load_data
 from oa_embodied_ai.recording.bag import align, read_bag, validate_recording_phases
-from oa_embodied_ai.recording.profile import validate_profile
+from oa_embodied_ai.recording.profile import PROPOSED_CAPTURE_PROFILES, validate_profile
 from oa_embodied_ai.training.inputs import inventory
 
 
-def prepare_episode(bag, profile, template, *, development=False):
-    profile = validate_profile(profile, development=development)
+def prepare_episode(bag, profile, template, *, development=False, enabled=()):
+    enabled = tuple(sorted(enabled))
+    profile = validate_profile(profile, development=development, enabled=enabled)
     source_hashes = inventory(bag)
-    data = read_bag(bag, profile)
-    validate_recording_phases(data, profile)
-    frames = align(data, profile)
+    if "proposed_capture_profile" in enabled:
+        expected = PROPOSED_CAPTURE_PROFILES.get(profile["profile_id"], {}).get("source_bag_sha256")
+        if expected is not None and source_hashes != expected:
+            raise ConversionError("Source bag differs from the Proposed recording binding")
+    timestamps, alignment, lift_phase = {}, {}, {}
+    data = read_bag(bag, profile, report=timestamps)
+    checked = reference.enabled(profile)
+    if checked:
+        # Proposed reference_integrity: sign and range of every source sample first
+        reference.check_source(data, profile)
+    validate_recording_phases(data, profile, report=lift_phase)
+    try:
+        frames = align(data, profile, report=alignment)
+    except ConversionError as exc:
+        named = reference.camera_missing(exc, profile) if checked else None
+        if named is not None:
+            raise named from exc
+        raise
+    report = (
+        reference.episode_report(bag, profile, data, frames, timestamps, alignment)
+        if checked
+        else {}
+    )
     if inventory(bag) != source_hashes:
         raise ConversionError("Source bag artifacts changed during capture validation")
-    return ConversionEpisode(frames, profile, template, Path(bag), source_hashes)
+    return ConversionEpisode(
+        frames,
+        profile,
+        template,
+        Path(bag),
+        source_hashes,
+        timestamps,
+        enabled,
+        alignment,
+        lift_phase,
+        report,
+    )
 
 
-def convert_collection(path, output, *, development=False, validate_only=False):
+def convert_collection(path, output, *, development=False, validate_only=False, enabled=()):
     """Manifest paths resolve relative to the manifest, independent of shell cwd."""
     path = Path(path).resolve(strict=True)
     collection = load_data(path)
@@ -57,6 +90,7 @@ def convert_collection(path, output, *, development=False, validate_only=False):
                 load_data(resolved["profile"]),
                 load_data(resolved["sidecar_template"]),
                 development=development,
+                enabled=enabled,
             )
         )
     # Export performs cross-episode checks before creating any output. For a

@@ -7,7 +7,7 @@ from pathlib import Path
 from jsonschema.exceptions import ValidationError
 
 from oa_embodied_ai.conversion.batch import convert_collection, prepare_episode
-from oa_embodied_ai.conversion.native import export_native
+from oa_embodied_ai.conversion.native import export_native_episodes, validate_collection
 from oa_embodied_ai.conversion.validation import ConversionError
 from oa_embodied_ai.dataset_qa.strict_io import load_data
 
@@ -23,6 +23,13 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--synthetic-development", action="store_true")
     parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument(
+        "--enable-proposed",
+        action="append",
+        default=[],
+        metavar="RULE",
+        help="Enable one Proposed (unapproved) conversion rule by name; repeat per rule",
+    )
     args = parser.parse_args(argv)
     try:
         if args.collection:
@@ -35,6 +42,7 @@ def main(argv=None):
                 args.output,
                 development=args.synthetic_development,
                 validate_only=args.validate_only,
+                enabled=args.enable_proposed,
             )
         else:
             if not args.bag or not args.profile or not args.sidecar_template:
@@ -46,16 +54,12 @@ def main(argv=None):
                 load_data(args.profile),
                 load_data(args.sidecar_template),
                 development=args.synthetic_development,
+                enabled=args.enable_proposed,
             )
-            if not args.validate_only:
-                export_native(
-                    episode.frames,
-                    episode.profile,
-                    episode.template,
-                    args.output,
-                    source_bag=episode.source_bag,
-                    expected_source_sha256=episode.source_sha256,
-                )
+            if args.validate_only:
+                validate_collection([episode], args.output)
+            else:
+                export_native_episodes([episode], args.output)
         if args.validate_only:
             print(
                 "PASS: selected episodes structurally validated; training/physical acceptance NOT_VERIFIED"
