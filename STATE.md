@@ -38,3 +38,8 @@ same private manifest, policy and dataset bytes for C10 and C11, checks explicit
 episode identities and rejects contradictory report fields. C10 keeps recorded
 simulation outside real-episode evidence. See [canonical follow-up](docs/c10/pr5-current-review.md)
 for review order, the current DCO and CLA status, and software verification.
+
+25 November 2026 — C10 requires a literal integer index and nonblank recording
+review evidence text in legacy single-episode policies. Malformed bindings
+cannot satisfy the real-episode check. Valid policies, multi-episode routing
+and the accepted C9 contract are unchanged.

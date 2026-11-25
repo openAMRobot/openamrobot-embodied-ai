@@ -55,6 +55,30 @@ def test_explicit_policy_bindings_cover_each_episode_without_fallback(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("key", "invalid"),
+    [
+        ("episode_index", False),
+        ("episode_index", 0.0),
+        ("evidence", "  "),
+        ("evidence", ["fabricated"]),
+    ],
+)
+def test_legacy_recording_evidence_requires_exact_identity_and_text(tmp_path, key, invalid):
+    sidecar, _, policy = fixture()
+    sidecar["openamrobot"]["provenance"]["data_origin"] = "actual"
+    binding = sidecar["native_lerobot"]
+    approval = {
+        field: binding[field]
+        for field in ("dataset_id", "dataset_revision", "episode_id", "episode_index")
+    }
+    approval["evidence"] = "Fabricated unit test only"
+    policy["real_episode"] = approval
+    assert real_finding(sidecar, policy, tmp_path) == "PASS"
+    approval[key] = invalid
+    assert real_finding(sidecar, policy, tmp_path) == "NOT_VERIFIED"
+
+
+@pytest.mark.parametrize(
     "bad", [[], {"01": {}}, {"-1": {}}, {"0": []}, {"0": {"episode_index": 1}}]
 )
 def test_malformed_multi_episode_policy_is_rejected_before_qa(tmp_path, bad):

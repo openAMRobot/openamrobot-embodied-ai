@@ -285,7 +285,10 @@ def evidence(root, sidecar, policy, emit, *, conversion_origin=None):
     origin = am["provenance"]["data_origin"]
     if conversion_origin in ("simulation", "synthetic"):
         origin = conversion_origin
-    real_verified = (origin == "actual" and bool(real.get("evidence"))
+    review_evidence = real.get("evidence")
+    real_verified = (origin == "actual"
+                     and isinstance(review_evidence, str) and bool(review_evidence.strip())
+                     and type(real.get("episode_index")) is int
                      and all(real.get(key) == sidecar["native_lerobot"][key]
                              for key in ("dataset_id","dataset_revision","episode_id","episode_index")))
     emit("C10_REAL_EPISODE", "PASS" if real_verified else "NOT_VERIFIED",
