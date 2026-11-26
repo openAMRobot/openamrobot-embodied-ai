@@ -2,14 +2,15 @@
 
 Python tooling for OpenAMRobot embodied AI. Basic runtime dependencies are PyYAML
 and jsonschema. Optional `native` installs PyArrow for episode artifact inspection;
-system ffmpeg/ffprobe enable media checks. No ROS or training stack is required.
+system ffmpeg/ffprobe enable media checks. The optional `training` extra provides
+the model dependencies for C11 training and offline evaluation.
 
 | Module | Status |
 | --- | --- |
 | `dataset_qa` | Registry validation, C10 episode/native artifact checks and fail-closed report consumer |
 | `conversion` | Planned, README only |
-| `training` | Planned, README only |
-| `evaluation` | Planned, README only |
+| `training` | [Experimental ACT-like training](oa_embodied_ai/training/README.md) on a C10-gated snapshot |
+| `evaluation` | [Held-out offline checkpoint evaluation](oa_embodied_ai/evaluation/README.md). Closed-loop rollout modes report `NOT_VERIFIED` with zero executed rollouts. |
 
 ```bash
 python -m pip install -e "python[test]"

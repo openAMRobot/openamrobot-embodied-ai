@@ -43,3 +43,9 @@ for review order, the current DCO and CLA status, and software verification.
 review evidence text in legacy single-episode policies. Malformed bindings
 cannot satisfy the real-episode check. Valid policies, multi-episode routing
 and the accepted C9 contract are unchanged.
+
+26 November 2026 — Marcus approved PR #5 through `ad8d92b` as the canonical
+C10/C11 path from the C11 side. The README follow-up documents the experimental
+trainer and held-out offline evaluator. Closed-loop evaluation and physical
+acceptance remain unverified. Superseding #3 and #4 awaits Mohamed and owner
+coordination.

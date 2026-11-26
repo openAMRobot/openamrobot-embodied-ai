@@ -8,8 +8,8 @@ This repository holds the embodied AI work for OpenAMRobot:
 
 - Episode capture: a ROS 2 recorder. It is a skeleton today and records nothing until the C9 capture topic contract is approved.
 - Dataset QA (C10): release registry validation and read-only C9/native episode quality checks. The migration is draft; real-episode acceptance remains unverified.
-- Imitation-learning baseline ACT (C11): planned.
-- Evaluation (C14): offline and simulation evaluation, planned.
+- Imitation learning (C11): experimental ACT-like training with `oa-c11-train`.
+- Evaluation: `oa-c11-eval` measures held-out prediction error. Closed-loop evaluation still needs a simulator adapter.
 - Policy runtime: a ROS 2 lifecycle node that runs a policy and publishes base commands. It is a skeleton today.
 
 Current maturity level: Experimental.
@@ -35,8 +35,8 @@ Code owners are the lead and Mohamed, so a pull request by the lead can still be
 | `ros2/openamrobot_policy_runner` | Policy runner lifecycle node skeleton (ament_python). |
 | `python/oa_embodied_ai/dataset_qa` | Registry `oa-dataset-qa`, episode `oa-c10-check`, and the fail-closed C11 report consumer. |
 | `python/oa_embodied_ai/conversion` | README only: capture to LeRobotDataset export, planned. |
-| `python/oa_embodied_ai/training` | README only: C11 ACT baseline, planned. |
-| `python/oa_embodied_ai/evaluation` | README only: C14 evaluation, planned. |
+| `python/oa_embodied_ai/training` | [Experimental C11 trainer](python/oa_embodied_ai/training/README.md) with C10 input gating. |
+| `python/oa_embodied_ai/evaluation` | [Offline checkpoint evaluation](python/oa_embodied_ai/evaluation/README.md). Rollout requests report `NOT_VERIFIED` with zero executed rollouts. |
 | `schemas/dataset_registry.schema.json` | Schema for one dataset release entry. |
 | `datasets/registry.yaml` | Dataset release registry. |
 | `tests` | Tests for the ROS 2 nodes. |
