@@ -1,0 +1,46 @@
+name: C10 C11 CPU integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  cpu-software-verification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: openAMRobot/openamrobot-interfaces
+          ref: 87ab8a936c97ab55ee74b8988ca3d7659160ea6a
+          path: external/openamrobot-interfaces
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU software-test dependencies
+        run: |
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e 'python[test,native,training]'
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Run integration regressions
+        run: |
+          mkdir -p .verification/c11
+          python -m pytest python/tests -q --junitxml=.verification/c11/pytest.xml
+      - name: Run bounded synthetic CPU evidence
+        run: python python/tools/run_c11_smoke.py --output-dir .verification/c11/synthetic
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: c11-synthetic-software-evidence
+          path: .verification/c11/
+          include-hidden-files: true
+          if-no-files-found: error
